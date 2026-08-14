@@ -8,7 +8,8 @@
 
 ```powershell
 cd C:\Users\lys6076\Desktop\workspace\LYG_workflow_1\model_convert
-docker run -it --net host --rm -v "${PWD}:/data" pulsar2:4.0
+docker load -i ax_pulsar2_4.0.tar.gz # 装载容器
+docker run -it --net host --rm -v "$(pwd):/workflow" -w /workflow pulsar2:4.0 # 进入容器并且将当前目录挂载到容器的/workflow目录下
 ```
 
 容器内：

@@ -64,7 +64,7 @@ model_train/runs/manhole-cover-yolo11n/weights/best.pt
 
 ## Load
 ```bash 
-docker load-i ax_pulsar2_4.0.tar.gz
+docker load -i ax_pulsar2_4.0.tar.gz
 ```
 
 ## Activate
