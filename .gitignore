@@ -1,0 +1,87 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local environments
+.env
+.venv/
+venv/
+env/
+*.log
+
+# Model weights and exported models
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
+*.torchscript
+*.tflite
+*.pb
+*.bin
+*.axmodel
+
+# Large binary/download artifacts
+*.whl
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+*.pdf
+
+# Training/export/validation outputs
+**/runs/
+**/output/
+**/outputs/
+**/weights/
+**/*.cache
+
+# Downloaded datasets
+model_train/Manhole-Cover*/
+model_train/*Dataset*/
+model_train/dataset/
+model_train/datasets/
+model_convert/dataset/
+
+# Conversion/simulation generated artifacts
+model_convert/models/*
+model_convert/output/*
+model_convert/pulsar2_sim/models/*
+model_convert/pulsar2_sim/sim_inputs/
+model_convert/pulsar2_sim/sim_outputs/
+model_convert/pulsar2_sim/lyg_pose_out.jpg
+
+# Exported model artifacts
+model_export/model/
+model_export/runs/
+
+# Validation data/model artifacts
+model_val/images/*
+model_val/labels/*
+model_val/model/*
+model_val/runs/*
+
+# Keep placeholder files
+!**/.gitkeep
+
+# Keep reproducible workflow source/config/docs
+!model_train/*.py
+!model_train/*.txt
+!model_export/*.py
+!model_convert/*.py
+!model_convert/*.md
+!model_convert/*.txt
+!model_convert/requirements.txt
+!model_convert/config/*.json
+!model_val/*.py
+!model_val/*.md
+!model_val/*.txt
+!model_val/*.yaml
+!model_val/requirements*.txt
+!model_val/src_gpu/*.py
+!model_val/src_npu/*.py
