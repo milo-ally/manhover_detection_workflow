@@ -17,8 +17,8 @@ AXModel 输入 images [1,640,640,3] U8 NHWC RGB
 model_val/
   images/00001.jpg
   labels/00001.txt
-  model/best_sim.onnx
-  model/best_sim.axmodel
+  model/manhole-cover-yolo11s-production.onnx
+  model/manhole-cover-yolo11s-production.axmodel
 ```
 
 每行标签为归一化 YOLO 检测格式：
@@ -42,9 +42,9 @@ docker run -it --net host --rm -v "${PWD}:/workflow" pulsar2:4.0
 ```bash
 cd /workflow/model_val
 python src_gpu/val_detect_manhover_onnx.py \
-  --onnx_model model/best_sim.onnx \
+  --onnx_model model/manhole-cover-yolo11s-production.onnx \
   --data data_gpu.yaml --provider auto \
-  --save-path runs/best_sim_onnx.txt
+  --save-path runs/manhole-cover-yolo11s-production_onnx.txt
 ```
 
 强制 GPU 时使用 `--provider cuda`；流程冒烟测试可使用 `--provider cpu --limit 10`。
@@ -54,12 +54,12 @@ python src_gpu/val_detect_manhover_onnx.py \
 此步骤必须在 AX650N 板端执行，不在 x86 Pulsar2 容器中执行：
 
 ```bash
-cd model_val
+cd /workflow/model_val
 pip3 install ./axengine-0.1.3-py3-none-any.whl
 python3 src_npu/val_detect_manhover_npu.py \
-  --axmodel model/best_sim.axmodel \
+  --axmodel model/manhole-cover-yolo11s-production.axmodel \
   --data data_npu.yaml \
-  --save-path runs/best_sim_axmodel.txt
+  --save-path runs/manhole-cover-yolo11s-production_axmodel.txt
 ```
 
 两边必须使用同一份 `images/`、`labels/` 和默认的 `--conf-thres 0.001 --iou-thres 0.7 --max-det 300`。
