@@ -2,7 +2,8 @@ from ultralytics import YOLO
 
 
 def main():
-    metrics = YOLO("model/manhole-cover-yolo11s-production.onnx").val(
+    model = YOLO("model/manhole-cover-yolo11s-production.onnx")
+    metrics = model.val(
         data="../model_train/Manhole-Cover-5Class-3/data.yaml",
         split="val",
         imgsz=640,
