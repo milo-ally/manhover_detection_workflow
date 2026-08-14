@@ -4,7 +4,8 @@ from ultralytics import YOLO
 
 
 def main():
-    exported = YOLO("../model_train/runs/manhole-cover-yolo11s-production/weights/best.pt").export(
+    model = YOLO("../model_train/runs/manhole-cover-yolo11s-production/weights/best.pt")
+    exported = model.export(
         format="onnx",
         imgsz=640,
         batch=1,
