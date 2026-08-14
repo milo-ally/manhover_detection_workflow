@@ -43,8 +43,14 @@ docker run -it --net host --rm -v "${PWD}:/workflow" pulsar2:4.0
 cd /workflow/model_val
 python src_gpu/val_detect_manhover_onnx.py \
   --onnx_model model/manhole-cover-yolo11s-production.onnx \
-  --data data_gpu.yaml --provider auto \
-  --save-path runs/manhole-cover-yolo11s-production_onnx.txt
+  --data data_gpu.yaml \
+  --provider auto \
+  --conf-thres 0.001 \
+  --iou-thres 0.7 \
+  --max-det 300 \
+  --save-path runs/manhole-cover-yolo11s-production_onnx.txt \
+  --prediction-path runs/manhole-cover-yolo11s-production_onnx_predictions.jsonl \
+  --image-dir runs/manhole-cover-yolo11s-production_onnx_images
 ```
 
 强制 GPU 时使用 `--provider cuda`；流程冒烟测试可使用 `--provider cpu --limit 10`。
@@ -59,12 +65,52 @@ pip3 install ./axengine-0.1.3-py3-none-any.whl
 python3 src_npu/val_detect_manhover_npu.py \
   --axmodel model/manhole-cover-yolo11s-production.axmodel \
   --data data_npu.yaml \
-  --save-path runs/manhole-cover-yolo11s-production_axmodel.txt
+  --conf-thres 0.001 \
+  --iou-thres 0.7 \
+  --max-det 300 \
+  --save-path runs/manhole-cover-yolo11s-production_axmodel.txt \
+  --prediction-path runs/manhole-cover-yolo11s-production_axmodel_predictions.jsonl \
+  --image-dir runs/manhole-cover-yolo11s-production_axmodel_images
 ```
 
 两边必须使用同一份 `images/`、`labels/` 和默认的 `--conf-thres 0.001 --iou-thres 0.7 --max-det 300`。
 
-## 4. 判定
+验证时终端会逐张输出标注数和检测数，`*_predictions.jsonl` 每行保存一张图片的类别、置信度和 `xyxy` 检测框，`*_images/` 保存完成后处理并绘制检测框的结果图片。
+
+## 4. 查看后处理结果图片
+
+计算 mAP 时使用 `--conf-thres 0.001`。仅人工查看实际检测效果时，建议使用 `--conf-thres 0.25`，减少低置信度检测框。
+
+ONNX：
+
+```bash
+python src_gpu/val_detect_manhover_onnx.py \
+  --onnx_model model/manhole-cover-yolo11s-production.onnx \
+  --data data_gpu.yaml \
+  --provider auto \
+  --conf-thres 0.25 \
+  --iou-thres 0.7 \
+  --max-det 300 \
+  --save-path runs/manhole-cover-yolo11s-production_onnx_visual.txt \
+  --prediction-path runs/manhole-cover-yolo11s-production_onnx_visual.jsonl \
+  --image-dir runs/manhole-cover-yolo11s-production_onnx_images
+```
+
+AX650N：
+
+```bash
+python3 src_npu/val_detect_manhover_npu.py \
+  --axmodel model/manhole-cover-yolo11s-production.axmodel \
+  --data data_npu.yaml \
+  --conf-thres 0.25 \
+  --iou-thres 0.7 \
+  --max-det 300 \
+  --save-path runs/manhole-cover-yolo11s-production_axmodel_visual.txt \
+  --prediction-path runs/manhole-cover-yolo11s-production_axmodel_visual.jsonl \
+  --image-dir runs/manhole-cover-yolo11s-production_axmodel_images
+```
+
+## 5. 判定
 
 比较总体和各类别的 `mAP50`、`mAP50-95`。建议 AXModel 的绝对下降不超过 `0.01`，并人工检查至少 20 张困难样本；最终阈值以项目要求为准。板端还需连续推理至少 100 次，记录平均/P95 延迟、峰值内存和异常次数。
 

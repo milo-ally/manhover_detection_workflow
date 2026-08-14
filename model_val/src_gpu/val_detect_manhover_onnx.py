@@ -44,11 +44,14 @@ def main():
     parser.add_argument("--iou-thres", type=float, default=0.7)
     parser.add_argument("--max-det", type=int, default=300)
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--save-path", default="runs/best_sim_onnx.txt")
+    parser.add_argument("--save-path", default="runs/manhole-cover-yolo11s-production_onnx.txt")
+    parser.add_argument("--prediction-path", default="runs/manhole-cover-yolo11s-production_onnx_predictions.jsonl")
+    parser.add_argument("--image-dir", default="runs/manhole-cover-yolo11s-production_onnx_images")
     args = parser.parse_args()
     runner = OnnxRunner(args.onnx_model, args.output_name, args.provider)
     run_validation(runner, runner.input.shape, "onnx", args.data, args.conf_thres,
-                   args.iou_thres, args.max_det, args.save_path, args.limit)
+                   args.iou_thres, args.max_det, args.save_path, args.prediction_path,
+                   args.image_dir, args.limit)
 
 
 if __name__ == "__main__":

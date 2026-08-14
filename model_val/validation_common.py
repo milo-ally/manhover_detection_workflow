@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dependency-light detection validation shared by ONNX Runtime and AXEngine."""
 
+import json
 import time
 from pathlib import Path
 
@@ -138,6 +139,27 @@ def decode_output(output, image_shape, gain, pad, nc, conf_thres, iou_thres, max
     return np.column_stack((boxes, scores[keep], classes[keep])).astype(np.float32)
 
 
+def save_result_image(image, predictions, names, destination):
+    colors = [(46, 204, 113), (52, 73, 235), (0, 165, 255),
+              (0, 0, 255), (255, 191, 0)]
+    result = image.copy()
+    for x1, y1, x2, y2, score, class_id in predictions:
+        class_id = int(class_id)
+        color = colors[class_id % len(colors)]
+        start, end = (int(x1), int(y1)), (int(x2), int(y2))
+        cv2.rectangle(result, start, end, color, 2)
+        text = f"{names[class_id]} {score:.3f}"
+        (width, height), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        top = max(start[1], height + 6)
+        cv2.rectangle(result, (start[0], top - height - 6),
+                      (start[0] + width + 6, top), color, -1)
+        cv2.putText(result, text, (start[0] + 3, top - 4), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(destination), result):
+        raise RuntimeError(f"failed to save result image: {destination}")
+
+
 def load_labels(label_path, image_shape, nc):
     if not label_path.exists():
         return np.empty((0, 5), dtype=np.float32)
@@ -243,7 +265,7 @@ def format_report(results, image_count, class_images, conf_thres, inference_ms):
 
 
 def run_validation(infer, input_shape, backend, data_path, conf_thres, iou_thres,
-                   max_det, save_path, limit=0):
+                   max_det, save_path, prediction_path, image_dir_path, limit=0):
     image_dir, label_dir, names = load_data_config(data_path)
     images = sorted(path for path in image_dir.rglob("*")
                     if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES)
@@ -253,6 +275,10 @@ def run_validation(infer, input_shape, backend, data_path, conf_thres, iou_thres
     input_hw, layout = resolve_input(input_shape)
     print(f"Backend: {backend}; input: {input_shape} {layout}; images: {len(images)}")
     stats, class_images, elapsed = [], np.zeros(len(names), dtype=np.int64), 0.0
+    prediction_file = Path(prediction_path)
+    prediction_file.parent.mkdir(parents=True, exist_ok=True)
+    prediction_file.write_text("", encoding="utf-8")
+    result_image_dir = Path(image_dir_path)
     for index, image_path in enumerate(images, 1):
         image = cv2.imread(str(image_path))
         if image is None:
@@ -271,8 +297,22 @@ def run_validation(infer, input_shape, backend, data_path, conf_thres, iou_thres
                       predictions[:, 4] if len(predictions) else np.empty(0),
                       predictions[:, 5] if len(predictions) else np.empty(0),
                       targets[:, 0] if len(targets) else np.empty(0)))
-        if index == len(images) or index % 25 == 0:
-            print(f"Processed {index}/{len(images)}")
+        result = {
+            "image": str(image_path.relative_to(image_dir)),
+            "targets": len(targets),
+            "detections": [
+                {"class_id": int(row[5]), "class_name": names[int(row[5])],
+                 "confidence": round(float(row[4]), 6),
+                 "xyxy": [round(float(value), 3) for value in row[:4]]}
+                for row in predictions
+            ],
+        }
+        with prediction_file.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(result, ensure_ascii=False) + "\n")
+        save_result_image(image, predictions, names,
+                          result_image_dir / image_path.relative_to(image_dir))
+        print(f"[{index}/{len(images)}] {result['image']}: "
+              f"targets={len(targets)}, detections={len(predictions)}")
     if sum(len(item[3]) for item in stats) == 0:
         raise ValueError("validation set contains no YOLO detection labels")
     report = format_report(calculate_metrics(stats, names), len(images), class_images,
@@ -282,4 +322,6 @@ def run_validation(infer, input_shape, backend, data_path, conf_thres, iou_thres
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(report, encoding="utf-8")
     print(f"Saved: {destination.resolve()}")
+    print(f"Predictions: {prediction_file.resolve()}")
+    print(f"Result images: {result_image_dir.resolve()}")
     return report

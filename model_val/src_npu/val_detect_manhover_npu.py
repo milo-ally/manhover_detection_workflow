@@ -50,11 +50,14 @@ def main():
     parser.add_argument("--iou-thres", type=float, default=0.7)
     parser.add_argument("--max-det", type=int, default=300)
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--save-path", default="runs/best_sim_axmodel.txt")
+    parser.add_argument("--save-path", default="runs/manhole-cover-yolo11s-production_axmodel.txt")
+    parser.add_argument("--prediction-path", default="runs/manhole-cover-yolo11s-production_axmodel_predictions.jsonl")
+    parser.add_argument("--image-dir", default="runs/manhole-cover-yolo11s-production_axmodel_images")
     args = parser.parse_args()
     runner = AxRunner(args.axmodel, args.output_name)
     run_validation(runner, runner.input.shape, "axmodel", args.data, args.conf_thres,
-                   args.iou_thres, args.max_det, args.save_path, args.limit)
+                   args.iou_thres, args.max_det, args.save_path, args.prediction_path,
+                   args.image_dir, args.limit)
 
 
 if __name__ == "__main__":
