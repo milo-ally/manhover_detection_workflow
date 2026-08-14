@@ -9,7 +9,7 @@ def main():
         format="onnx",
         imgsz=640,
         batch=1,
-        device=0,
+        device="cpu",
         half=False,
         dynamic=False,
         simplify=True,
@@ -20,8 +20,8 @@ def main():
         verbose=False,
     )
 
-    makedirs("model", exist_ok=True)
-    target = "model/manhole-cover-yolo11s-production.onnx"
+    makedirs("/home/milo/workspace/LYG_manhover_detection_workflow/model_export/model", exist_ok=True)
+    target = "/home/milo/workspace/LYG_manhover_detection_workflow/model_export/model/manhole-cover-yolo11s-production.onnx"
     copy2(exported, target)
     print(f"ONNX exported: {target}")
 
