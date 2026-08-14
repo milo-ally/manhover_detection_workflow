@@ -4,7 +4,7 @@ from ultralytics import YOLO
 
 
 def main():
-    model = YOLO("../model_train/runs/manhole-cover-yolo11s-production/weights/best.pt")
+    model = YOLO("/home/milo/workspace/LYG_manhover_detection_workflow/model_train/runs/manhole-cover-yolo11s-production/weights/best.pt")
     exported = model.export(
         format="onnx",
         imgsz=640,
