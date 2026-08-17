@@ -153,6 +153,28 @@ target_link_libraries(manhole_cover_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 install(TARGETS manhole_cover_plugin DESTINATION bin)
 ```
 
+建议同时把历史遗留的主程序名 `demo_helmet` 改成通用名，避免部署井盖模型时还使用安全帽 demo 名称：
+
+```cmake
+add_executable(device_ai_demo ${SRC_APP} ${SRC_LIST_LIBS})
+install(TARGETS device_ai_demo DESTINATION bin)
+```
+
+对应地，`target_link_libraries(demo_helmet ...)` 也要改成：
+
+```cmake
+target_link_libraries(device_ai_demo
+    axdl_lib
+    ByteTrack
+    ${AX_LIBS}
+    ${DEMUX_LIBS}
+    ${OpenCV_LIBS}
+    ${SYS_LIBS}
+)
+```
+
+如果暂时不改主程序目标名，后续启动命令仍然只能使用旧的 `./demo_helmet`。
+
 如果增加了专用 OSD Renderer，`src/osd_renderers/*.cpp` 已被 glob 收集，但仍需要在 `ai_processor.cpp` include 对应头文件并创建 Renderer。
 
 ## 5. 改插件注册逻辑
@@ -261,10 +283,10 @@ OpenCV 和 AX SDK 运行库可链接
 ```bash
 cd /root/device_side/bin
 export LD_LIBRARY_PATH=$PWD:/root/device_side/bin:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
-./demo_helmet -c ../config/streams_config.json
+./device_ai_demo -c ../config/streams_config.json
 ```
 
-如果从源码目录运行，注意配置中的 `../models/*.axmodel` 是相对当前工作目录解析的，通常应从 `bin/` 启动。
+如果没有把 CMake 主程序目标从 `demo_helmet` 改成 `device_ai_demo`，这里应使用 `./demo_helmet`。如果从源码目录运行，注意配置中的 `../models/*.axmodel` 是相对当前工作目录解析的，通常应从 `bin/` 启动。
 
 ## 8. 跑通标准
 
@@ -289,7 +311,7 @@ output0 contains NaN/Inf
 ```text
 1. 单张图片：model_convert/pulsar2_sim 结果正常
 2. 精度：model_val 中 ONNX 和 AXModel mAP 对比通过
-3. 板端：demo_helmet 能加载 .axmodel 和插件
+3. 板端：device_ai_demo 能加载 .axmodel 和插件
 4. 实流：OSD 框、类别、置信度和仿真/验证结果基本一致
 5. 稳定性：连续推理至少 100 次，记录平均延迟、P95 延迟、峰值内存和异常次数
 ```
