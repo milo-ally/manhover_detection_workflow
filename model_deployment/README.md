@@ -2,14 +2,6 @@
 
 基于已完成精度验证的 `compiled.axmodel`，通过 SDK‑GEN 导出 AX650N 板端 C++ 可加载 `model.bin`。
 
-plaintext
-
-
-
-
-
-
-
 ```
 ONNX 输入      images [1,3,640,640] FP32 RGB / 255
 AXModel输入    images [1,640,640,3] U8 NHWC RGB
@@ -34,16 +26,15 @@ models/
 
 1. 导入 `yolo11s-manhole-detection.axmodel`
 2. 工具 → SDK‑GEN，运行时选择 `AX‑ENGINE Runtime binary`
-3. 输出至 `deploy_out/`，得到 `model.bin`
+3. 输出至 `deploy_outputs/`，得到 `model.bin`
 
 ```bash
-docker run -it --net host --rm -v "${PWD}:/workflow" pulsar2:5.x
+docker run -it --net host --rm -v "${PWD}:/workflow" pulsar2:4.0
 ```
 
 ```bash
-cd /workflow/model_convert
 pulsar2 sdk‑gen \
-  --axmodel ./model/yolo11s-manhole-detection.axmodel \
+  --axmodel ./models/yolo11s-manhole-detection.axmodel \
   --target_runtime axengine \
   --output ./deploy_out
 ```
