@@ -25,15 +25,15 @@ pulsar2 version
 量化图片必须是有代表性的业务图片，不使用验证集：
 
 ```bash
-tar -cvf dataset/manhover.tar -C dataset/calib_images .
-tar -tf dataset/manhover.tar | grep -Ei '\.(jpg|jpeg|png)$' | wc -l
+tar -cvf dataset/manhole_cover.tar -C dataset/calib_images .
+tar -tf dataset/manhole_cover.tar | grep -Ei '\.(jpg|jpeg|png)$' | wc -l
 ```
 
 ## 3. 检查 ONNX
 
 ```bash
-python show.py --onnx_model models/manhole-cover-yolo11s-production.onnx \
-  --format json --output models/manhole-cover-yolo11s-production.md --check
+python show.py --onnx_model models/yolo11s-manhole-detection.onnx \
+  --format json --output models/yolo11s-manhole-detection.onnx.json --check
 ```
 
 预期为 `images [1,3,640,640]` 和 `output0 [1,9,8400]`。checker 通过只表示 ONNX 结构合法。
@@ -43,20 +43,20 @@ python show.py --onnx_model models/manhole-cover-yolo11s-production.onnx \
 不手写 `build_config.json`：
 
 ```bash
-python build.py --onnx_model models/best_sim.onnx \
-  --output_config config/manhole-cover-yolo11s-production.onnx.build_config.json \
-  --calibration_dataset ./dataset/manhover.tar \
-  --calibration_size 73 --npu_mode NPU1 --overwrite
+python build.py --onnx_model models/yolo11s-manhole-detection.onnx \
+  --output_config config/yolo11s-manhole-detection.onnx.build_config.json \
+  --calibration_dataset ./dataset/manhole_cover.tar \
+  --calibration_size 130 --npu_mode NPU1 --overwrite
 ```
 
 ## 5. 转换
 
 ```bash
-mkdir -p output/best_sim
-pulsar2 build --config config/manhole-cover-yolo11s-production.onnx.build_config.json \
-  --input models/manhole-cover-yolo11s-production.onnx \
-  --output_dir output/manhole-cover-yolo11s-production \
-  --output_name manhole-cover-yolo11s-production.axmodel \
+mkdir -p output/yolo11s-manhole-detection
+pulsar2 build --config config/yolo11s-manhole-detection.onnx.build_config.json \
+  --input models/yolo11s-manhole-detection.onnx \
+  --output_dir output/yolo11s-manhole-detection \
+  --output_name yolo11s-manhole-detection.axmodel \
   --target_hardware AX650 --npu_mode NPU1 \
   --compiler.check 3 --compiler.check_mode CheckOutput \
   --compiler.check_cosine_simularity 0.999
@@ -66,15 +66,16 @@ pulsar2 build --config config/manhole-cover-yolo11s-production.onnx.build_config
 
 ## 6. 可选裁切
 
-仅当 Pulsar2 不支持尾部算子、板端需要中间 Tensor 或需要定位问题时使用。先从 `best_sim.md` 找到 Tensor 名：
+仅当 Pulsar2 不支持尾部算子、板端需要中间 Tensor 或需要定位问题时使用。先从 `yolo11s-manhole-detection.onnx.json` 找到 Tensor 名：
 
 ```bash
-python cut.py --onnx_model models/manhole-cover-yolo11s-production.onnx \
-  --output models/manhole-cover-yolo11s-production_head.onnx \
+python cut.py --onnx_model models/yolo11s-manhole-detection.onnx \
+  --output models/yolo11s-manhole-detection_head.onnx \
   --inputs images \
   --outputs /model.23/Concat_output_0 \
   --overwrite --list-on-error
-python show.py --onnx_model models/manhole-cover-yolo11s-production_head.onnx --check
+
+python show.py --onnx_model models/yolo11s-manhole-detection.onnx --check
 ```
 
 裁切后必须对新 ONNX 重新运行 `build.py` 和 `pulsar2 build`；被裁掉的后处理由板端 CPU 实现。
@@ -85,22 +86,22 @@ python show.py --onnx_model models/manhole-cover-yolo11s-production_head.onnx --
 # 预备
 cd pulsar2_sim
 mkdir -p models sim_inputs/1 sim_outputs
-cp ../output/manhole-cover-yolo11s-production/manhole-cover-yolo11s-production.axmodel ./models
-cp ../dataset/calib_images/10_jpg.rf.209d62874eb9c047d90b3dd008b7f7ed.jpg sim_images/1.jpg
+cp ../output/yolo11s-manhole-detection/yolo11s-manhole-detection.axmodel ./models
+cp ../dataset/calib_images/well0_0031.jpg sim_images/1.jpg
 echo 1 > list.txt
 
 # 预处理 
 python cli_detect_manhover.py --pre_processing \
-  --image_path sim_images/1.jpg --axmodel_path models/manhole-cover-yolo11s-production.axmodel \
+  --image_path sim_images/1.jpg --axmodel_path models/yolo11s-manhole-detection.axmodel \
   --intermediate_path sim_inputs/1
 
 # 推理
-pulsar2 run --model models/manhole-cover-yolo11s-production.axmodel \
+pulsar2 run --model models/yolo11s-manhole-detection.axmodel \
   --input_dir sim_inputs --output_dir sim_outputs --list list.txt
 
 # 后处理
 python cli_detect_manhover.py --post_processing \
-  --image_path sim_images/1.jpg --axmodel_path models/manhole-cover-yolo11s-production.axmodel \
+  --image_path sim_images/1.jpg --axmodel_path models/yolo11s-manhole-detection.axmodel \
   --intermediate_path sim_outputs/1 --output_image 1_result.jpg
 ```
 

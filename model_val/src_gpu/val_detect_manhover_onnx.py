@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import sys
 from pathlib import Path
-
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from validation_common import run_validation  # noqa: E402
@@ -34,6 +34,28 @@ class OnnxRunner:
         return self.session.run([self.output_name], {self.input.name: tensor})[0]
 
 
+def parse_val_txt_report(txt_path: Path):
+    """解析run_validation输出的txt报告，提取全局指标"""
+    lines = [line.rstrip("\n") for line in txt_path.read_text(encoding="utf-8").splitlines()]
+    header_idx = None
+    for idx, line in enumerate(lines):
+        if "Class" in line and "mAP50‑95" in line:
+            header_idx = idx
+            break
+    if header_idx is None:
+        raise RuntimeError("Cannot find report header, invalid validation report txt file.")
+    all_line = lines[header_idx + 1].strip()
+    parts = [p for p in all_line.split() if p]
+    return {
+        "images": int(parts[1]),
+        "total_targets": int(parts[2]),
+        "precision": float(parts[3]),
+        "recall": float(parts[4]),
+        "mAP50": float(parts[5]),
+        "mAP50_95": float(parts[6])
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Validate the manhole-cover ONNX detector")
     parser.add_argument("--onnx_model", required=True)
@@ -47,11 +69,37 @@ def main():
     parser.add_argument("--save-path", default="runs/manhole-cover-yolo11s-production_onnx.txt")
     parser.add_argument("--prediction-path", default="runs/manhole-cover-yolo11s-production_onnx_predictions.jsonl")
     parser.add_argument("--image-dir", default="runs/manhole-cover-yolo11s-production_onnx_images")
+    parser.add_argument("--metrics-json", help="Optional: output metrics json file path, e.g runs/metrics.json")
+
     args = parser.parse_args()
     runner = OnnxRunner(args.onnx_model, args.output_name, args.provider)
-    run_validation(runner, runner.input.shape, "onnx", args.data, args.conf_thres,
-                   args.iou_thres, args.max_det, args.save_path, args.prediction_path,
-                   args.image_dir, args.limit)
+
+    # 原有评估流程，完全不变
+    run_validation(
+        runner,
+        runner.input.shape,
+        "onnx",
+        args.data,
+        args.conf_thres,
+        args.iou_thres,
+        args.max_det,
+        args.save_path,
+        args.prediction_path,
+        args.image_dir,
+        args.limit
+    )
+
+    # 新增：如果传了--metrics‑json，解析生成的txt，输出指标json
+    if args.metrics_json:
+        txt_file = Path(args.save_path)
+        metric = parse_val_txt_report(txt_file)
+        out_json = {
+            "summary": metric
+        }
+        out_p = Path(args.metrics_json)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_text(json.dumps(out_json, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\nMetrics json saved: {out_p.resolve()}")
 
 
 if __name__ == "__main__":
