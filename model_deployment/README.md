@@ -153,14 +153,14 @@ target_link_libraries(manhole_cover_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 install(TARGETS manhole_cover_plugin DESTINATION bin)
 ```
 
-建议同时把历史遗留的主程序名 `demo_helmet` 改成通用名，避免部署井盖模型时还使用安全帽 demo 名称：
+主程序目标已改成通用名 `device_ai_demo`：
 
 ```cmake
 add_executable(device_ai_demo ${SRC_APP} ${SRC_LIST_LIBS})
 install(TARGETS device_ai_demo DESTINATION bin)
 ```
 
-对应地，`target_link_libraries(demo_helmet ...)` 也要改成：
+对应链接目标：
 
 ```cmake
 target_link_libraries(device_ai_demo
@@ -172,8 +172,6 @@ target_link_libraries(device_ai_demo
     ${SYS_LIBS}
 )
 ```
-
-如果暂时不改主程序目标名，后续启动命令仍然只能使用旧的 `./demo_helmet`。
 
 如果增加了专用 OSD Renderer，`src/osd_renderers/*.cpp` 已被 glob 收集，但仍需要在 `ai_processor.cpp` include 对应头文件并创建 Renderer。
 
@@ -253,7 +251,7 @@ if (modelPath.find("manhole") != std::string::npos ||
 运行时热更新文件是 `/dev/shm/ai_config.json`：
 
 ```bash
-cp config/streams_config.json /dev/shm/ai_config.json
+cp config/streams_config_manhole.json /dev/shm/ai_config.json
 ```
 
 ## 7. 编译和启动
@@ -283,10 +281,10 @@ OpenCV 和 AX SDK 运行库可链接
 ```bash
 cd /root/device_side/bin
 export LD_LIBRARY_PATH=$PWD:/root/device_side/bin:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
-./device_ai_demo -c ../config/streams_config.json
+./device_ai_demo -c ../config/streams_config_manhole.json
 ```
 
-如果没有把 CMake 主程序目标从 `demo_helmet` 改成 `device_ai_demo`，这里应使用 `./demo_helmet`。如果从源码目录运行，注意配置中的 `../models/*.axmodel` 是相对当前工作目录解析的，通常应从 `bin/` 启动。
+如果从源码目录运行，注意配置中的 `../models/*.axmodel` 是相对当前工作目录解析的，通常应从 `bin/` 启动。
 
 ## 8. 跑通标准
 
@@ -314,4 +312,69 @@ output0 contains NaN/Inf
 3. 板端：device_ai_demo 能加载 .axmodel 和插件
 4. 实流：OSD 框、类别、置信度和仿真/验证结果基本一致
 5. 稳定性：连续推理至少 100 次，记录平均延迟、P95 延迟、峰值内存和异常次数
+```
+
+## 9. 最短 SOP
+
+已写入的代码和作用：
+
+```text
+device_side/plugins/model_manhole_cover.cpp
+  新增 ManholeCoverModel : IAIModel。
+  Init(): 读取 .axmodel，AX_ENGINE_CreateHandle，AX_ENGINE_GetIOInfo，分配 640*640*3 U8 NHWC RGB 输入 buffer 和输出 buffer。
+  Inference(): NV12->RGB，letterbox(640,pad=114)，AX_ENGINE_RunSync，解码 output0 [1,9,8400]。
+  后处理: output0 按 [channels,anchors] 解析；0..3=cx/cy/w/h，4..8=good/broke/lose/uncovered/circle 分数；按类别 NMS；还原 letterbox；写 AI_RESULT_T。
+  Deinit(): 释放 AX_ENGINE handle、AX_SYS_MemAlloc 内存和 pStride。
+  导出: CreateAIModel() / DestroyAIModel()，供 AIProcessor dlopen/dlsym 调用。
+
+device_side/CMakeLists.txt
+  新增 add_library(manhole_cover_plugin SHARED plugins/model_manhole_cover.cpp)。
+  新增 target_link_libraries(manhole_cover_plugin axdl_lib ByteTrack ${OpenCV_LIBS})。
+  新增 install(TARGETS manhole_cover_plugin DESTINATION bin)。
+  主程序目标从 demo_helmet 改为 device_ai_demo，并同步修改 target_link_libraries / install。
+
+device_side/src/manager/ai_processor.cpp
+  loadModel(): modelName/modelPath 包含 manhole 或 cover 时加载 ./libmanhole_cover_plugin.so。
+  applyModelParamsToEnv(): 将 conf_threshold/nms_threshold 写入 MANHOLE_CONF_THRESH/MANHOLE_NMS_THRESH。
+
+device_side/src/manager/config_service.cpp
+  getModelPath(): name=manhole_cover 或包含 manhole/cover 时默认映射到 ../models/manhole-cover-yolo11s-production.axmodel。
+
+device_side/config/streams_config_manhole.json
+  新增井盖模型单路运行配置；models[0].name=manhole_cover，path 指向 ../models/manhole-cover-yolo11s-production.axmodel。
+```
+
+需要放置的文件：
+
+```bash
+cd model_deployment/device_side
+cp ../../model_convert/output/manhole-cover-yolo11s-production/manhole-cover-yolo11s-production.axmodel \
+  models/manhole-cover-yolo11s-production.axmodel
+cp config/streams_config_manhole.json /dev/shm/ai_config.json
+```
+
+编译：
+
+```bash
+cd model_deployment/device_side
+cmake -S . -B build
+cmake --build build -j$(nproc)
+cmake --install build
+```
+
+运行：
+
+```bash
+cd model_deployment/device_side/bin
+export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
+./device_ai_demo -c ../config/streams_config_manhole.json
+```
+
+预期产物：
+
+```text
+bin/device_ai_demo
+bin/libmanhole_cover_plugin.so
+bin/libaxdl_lib.so
+bin/libByteTrack.so
 ```

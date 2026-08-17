@@ -520,6 +520,12 @@ std::string ConfigService::getModelPath(const std::string& modelName) const {
         return "../models/yolo11_human_detection.axmodel";
     }
 
+    // Manhole-cover five-class model. Keep this explicit so configs can use
+    // name="manhole_cover" without spelling the full model path every time.
+    if (modelPath.find("manhole") != std::string::npos || modelPath.find("cover") != std::string::npos) {
+        return "../models/manhole-cover-yolo11s-production.axmodel";
+    }
+
     // 人臉檢測
     if (modelPath.find("face_detector") != std::string::npos ||
         (modelPath.find("face") != std::string::npos &&

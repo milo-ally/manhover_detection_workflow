@@ -64,6 +64,11 @@ bool AIProcessor::loadModel(const std::string& modelPath, const std::string& mod
     } else if (pluginHint.find("fire") != std::string::npos || pluginHint.find("smoke") != std::string::npos) {
         pluginPath = "./libsmoke_fire_plugin.so";
         ALOGN("[AIProcessor] Using smoke/fire detection plugin for model: %s", modelPath.c_str());
+    // Manhole-cover five-class model has output0 [1,9,8400], so route it to
+    // the dedicated non-DFL decoder plugin instead of the existing YOLO DFL plugins.
+    } else if (pluginHint.find("manhole") != std::string::npos || pluginHint.find("cover") != std::string::npos) {
+        pluginPath = "./libmanhole_cover_plugin.so";
+        ALOGN("[AIProcessor] Using manhole cover plugin for model: %s", modelPath.c_str());
     } else if (pluginHint.find("plate") != std::string::npos) {
         pluginPath = "./libplate_detection_plugin.so";
         ALOGN("[AIProcessor] Using plate detection plugin for model: %s", modelPath.c_str());
@@ -237,6 +242,10 @@ void AIProcessor::applyModelParamsToEnv(const std::string& modelHint, const nloh
     } else if (lowerHint.find("smoke") != std::string::npos || lowerHint.find("fire") != std::string::npos) {
         setFloat("conf_threshold", "SMOKE_FIRE_CONF_THRESH");
         setFloat("nms_threshold", "SMOKE_FIRE_NMS_THRESH");
+    // Dedicated thresholds consumed by plugins/model_manhole_cover.cpp.
+    } else if (lowerHint.find("manhole") != std::string::npos || lowerHint.find("cover") != std::string::npos) {
+        setFloat("conf_threshold", "MANHOLE_CONF_THRESH");
+        setFloat("nms_threshold", "MANHOLE_NMS_THRESH");
     } else if (lowerHint.find("plate") != std::string::npos) {
         setFloat("conf_threshold", "PLATE_CONF_THRESH");
         setFloat("nms_threshold", "PLATE_NMS_THRESH");

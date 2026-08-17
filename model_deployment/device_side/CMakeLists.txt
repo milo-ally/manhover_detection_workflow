@@ -108,6 +108,10 @@ target_link_libraries(constructionsite_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 add_library(smoke_fire_plugin SHARED plugins/model_smoke_fire.cpp)
 target_link_libraries(smoke_fire_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 
+# Manhole-cover five-class plugin: output0 [1,9,8400], non-DFL decoder.
+add_library(manhole_cover_plugin SHARED plugins/model_manhole_cover.cpp)
+target_link_libraries(manhole_cover_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
+
 # 車牌偵測插件
 add_library(plate_detection_plugin SHARED plugins/model_plate_detection.cpp)
 target_link_libraries(plate_detection_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
@@ -141,7 +145,8 @@ endif()
 add_library(yolo_plugin SHARED plugins/model_helmet.cpp)
 target_link_libraries(yolo_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 
-add_executable(demo_helmet ${SRC_APP} ${SRC_LIST_LIBS})
+# Generic AI runtime entrypoint. The previous target name was demo_helmet.
+add_executable(device_ai_demo ${SRC_APP} ${SRC_LIST_LIBS})
 add_executable(face_enroll src/tools/face_enroll.cpp)
 target_sources(face_enroll PRIVATE
     ${COMMON_DIR}/common_sys.c
@@ -151,7 +156,7 @@ set(AX_LIBS ax_sys ax_vdec ax_ivps ax_venc ax_vo ax_mipi ax_3a ax_proton ax_nt_s
 set(DEMUX_LIBS avformat avcodec avutil swresample)
 set(SYS_LIBS dl pthread m rt stdc++fs)
 
-target_link_libraries(demo_helmet
+target_link_libraries(device_ai_demo
     axdl_lib
     ByteTrack
     ${AX_LIBS}
@@ -171,13 +176,14 @@ else()
     message(WARNING "dlib not found: face_enroll build may fail due to missing landmark dependency")
 endif()
 
-install(TARGETS demo_helmet DESTINATION bin)
+install(TARGETS device_ai_demo DESTINATION bin)
 install(TARGETS face_enroll DESTINATION bin)
 install(TARGETS yolo_plugin DESTINATION bin)
 install(TARGETS helmet_plugin DESTINATION bin)
 install(TARGETS fall_plugin DESTINATION bin)
 install(TARGETS constructionsite_plugin DESTINATION bin)
 install(TARGETS smoke_fire_plugin DESTINATION bin)
+install(TARGETS manhole_cover_plugin DESTINATION bin)
 install(TARGETS plate_detection_plugin DESTINATION bin)
 install(TARGETS human_detection_plugin DESTINATION bin)
 install(TARGETS behavior_plugin DESTINATION bin)
