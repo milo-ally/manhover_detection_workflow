@@ -23,8 +23,7 @@ AXModel输入    images [1,640,640,3] U8 NHWC RGB
 
 ```bash
 models/
-  model/yolo11s-manhole-detection.axmodel
-  deploy_out/
+  yolo11s-manhole-detection.axmodel
 ```
 
 类别 ID：`0=good`、`1=broke`、`2=lose`、`3=uncovered`、`4=circle`
