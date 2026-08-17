@@ -64,6 +64,17 @@ def parse_val_txt_report(txt_path: Path):
     }
 
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected: true / false")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Validate the manhole-cover AX650 detector")
     parser.add_argument("--axmodel", required=True)
@@ -76,10 +87,14 @@ def main():
     parser.add_argument("--save-path", default="runs/manhole-cover-yolo11s-production_axmodel.txt")
     parser.add_argument("--prediction-path", default="runs/manhole-cover-yolo11s-production_axmodel_predictions.jsonl")
     parser.add_argument("--image-dir", default="runs/manhole-cover-yolo11s-production_axmodel_images")
+    parser.add_argument("--save-images", type=str2bool, default=True, help="whether save drawn result images, true/false")
     parser.add_argument("--metrics-json", help="Optional: output metrics json file path, e.g runs/npu_metrics.json")
 
     args = parser.parse_args()
     runner = AxRunner(args.axmodel, args.output_name)
+
+    actual_image_dir = args.image_dir if args.save_images else None
+
     run_validation(
         runner,
         runner.input.shape,
@@ -90,11 +105,10 @@ def main():
         args.max_det,
         args.save_path,
         args.prediction_path,
-        args.image_dir,
+        actual_image_dir,
         args.limit
     )
 
-    # 可选输出指标json
     if args.metrics_json:
         txt_file = Path(args.save_path)
         metric = parse_val_txt_report(txt_file)
@@ -102,7 +116,7 @@ def main():
         out_p = Path(args.metrics_json)
         out_p.parent.mkdir(parents=True, exist_ok=True)
         out_p.write_text(json.dumps(out_json, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"\n✅ Metrics json saved: {out_p.resolve()}")
+        print(f"\nMetrics json saved: {out_p.resolve()}")
 
 
 if __name__ == "__main__":
