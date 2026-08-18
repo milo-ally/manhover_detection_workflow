@@ -35,7 +35,31 @@ model_deployment/rk3588/manhole_cover_detection/
 
 ## 板端编译
 
-板端需要安装 C++ 编译器、CMake 和带 `core/imgproc/videoio` 的 OpenCV。将本目录完整复制到板端后执行：
+板端需要安装 C++ 编译器、CMake、pkg-config 和带 `core/imgproc/videoio` 的 OpenCV 开发包：
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake pkg-config libopencv-dev
+pkg-config --modversion opencv4
+```
+
+如果 `libopencv-dev` 因板端 `rkmpp` FFmpeg 版本冲突无法安装，运行本目录的安装脚本。脚本只下载并解包开发文件，不会替换系统运行库：
+
+```bash
+chmod +x install_opencv.sh
+./install_opencv.sh
+```
+
+然后使用脚本输出的 `OpenCV_DIR` 配置 CMake，例如：
+
+```bash
+cmake -S . -B build \
+  -DOpenCV_DIR="$HOME/opt/opencv-dev/usr/lib/aarch64-linux-gnu/cmake/opencv4"
+```
+
+这种方式不会替换已经安装的 `rkmpp` FFmpeg 运行库。
+
+将本目录完整复制到板端后执行：
 
 ```bash
 cd model_deployment/rk3588/manhole_cover_detection

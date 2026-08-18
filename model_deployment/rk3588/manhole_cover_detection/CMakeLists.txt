@@ -13,7 +13,19 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
 set(RKNPU2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rknpu2" CACHE PATH "RKNPU2 runtime root")
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)
+find_package(OpenCV QUIET COMPONENTS core imgproc videoio)
+if(NOT OpenCV_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(OPENCV opencv4)
+    if(NOT OPENCV_FOUND)
+        pkg_check_modules(OPENCV REQUIRED opencv)
+    endif()
+    set(OpenCV_INCLUDE_DIRS ${OPENCV_INCLUDE_DIRS})
+    set(OpenCV_LIBS ${OPENCV_LIBRARIES})
+    link_directories(${OPENCV_LIBRARY_DIRS})
+    add_compile_options(${OPENCV_CFLAGS_OTHER})
+    message(STATUS "Using OpenCV from pkg-config: ${OPENCV_VERSION}")
+endif()
 
 add_executable(debug_demo
     plugins/model_manhole_cover.cpp
