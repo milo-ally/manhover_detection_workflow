@@ -82,13 +82,11 @@ plugins/*.cpp
   每个模型自己的 AX Engine 初始化、预处理、推理和后处理
 ```
 
-## 3. 写井盖插件
+## 3. 示例
 
-新增文件：
+### 3.1 写井盖插件
 
-```text
-device_side/plugins/model_manhole_cover.cpp
-```
+**新增文件：`device_side/plugins/model_manhole_cover.cpp`**
 
 插件必须实现 `IAIModel`：
 
@@ -143,21 +141,23 @@ AX_SYS_MemAlloc 申请的输入/输出内存
 pStride 数组
 ```
 
-## 4. 改编译文件
+### 3.2 改编译文件
 
-修改 `device_side/CMakeLists.txt`，加入插件库和安装目标：
+**修改 `device_side/CMakeLists.txt`，加入插件库和安装目标：**
 
 ```cmake
+# 井盖检测插件
 add_library(manhole_cover_plugin SHARED plugins/model_manhole_cover.cpp)
 target_link_libraries(manhole_cover_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
-install(TARGETS manhole_cover_plugin DESTINATION bin)
 ```
 
-主程序目标已改成通用名 `device_ai_demo`：
+确保井盖插件出现在 `install` 中, 主程序目标已改成通用名 `device_ai_demo`：
 
 ```cmake
 add_executable(device_ai_demo ${SRC_APP} ${SRC_LIST_LIBS})
-install(TARGETS device_ai_demo DESTINATION bin)
+...
+install(TARGETS manhole_cover_plugin DESTINATION bin) # make sure
+install(TARGETS device_ai_demo DESTINATION bin) # fixed
 ```
 
 对应链接目标：
@@ -170,7 +170,7 @@ target_link_libraries(device_ai_demo
     ${DEMUX_LIBS}
     ${OpenCV_LIBS}
     ${SYS_LIBS}
-)
+) # make sure
 ```
 
 如果增加了专用 OSD Renderer，`src/osd_renderers/*.cpp` 已被 glob 收集，但仍需要在 `ai_processor.cpp` include 对应头文件并创建 Renderer。

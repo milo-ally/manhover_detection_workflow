@@ -108,7 +108,7 @@ target_link_libraries(constructionsite_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 add_library(smoke_fire_plugin SHARED plugins/model_smoke_fire.cpp)
 target_link_libraries(smoke_fire_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 
-# Manhole-cover five-class plugin: output0 [1,9,8400], non-DFL decoder.
+# 井盖检测插件
 add_library(manhole_cover_plugin SHARED plugins/model_manhole_cover.cpp)
 target_link_libraries(manhole_cover_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 
