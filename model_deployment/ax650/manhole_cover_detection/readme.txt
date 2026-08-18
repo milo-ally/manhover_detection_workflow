@@ -10,7 +10,7 @@ manhole_cover_detection/
   plugins/model_manhole_cover.cpp
     井盖模型插件，实现 Init、Inference、Deinit 和插件导出函数。
   src/main.cpp
-    独立 MP4 推理程序，动态加载井盖插件并输出打框视频。
+    独立双模式推理程序，支持 MP4 文件输出和 RTSP AI 流输出。
   msp_sdk/include/
     编译需要的 AX650N SDK 头文件。
   CMakeLists.txt
@@ -31,7 +31,7 @@ SDK 头文件已经复制到 msp_sdk/include。AX650N 动态库通常位于板�
 
 在 AX650N 交叉编译环境中执行：
 
-  cd model_deployment/manhole_cover_detection
+  cd model_deployment/ax650/manhole_cover_detection
   cmake -S . -B build
   cmake --build build -j$(nproc)
   cmake --install build
@@ -62,7 +62,9 @@ SDK 头文件已经复制到 msp_sdk/include。AX650N 动态库通常位于板�
   ./debug_demo \
     --input /tmp/input.mp4 \
     --output /tmp/output_boxed.mp4 \
-    --model /tmp/manhole-cover-yolo11s-production.axmodel
+    --model /tmp/manhole-cover-yolo11s-production.axmodel \
+    --conf-thres 0.25 \
+    --iou-thres 0.45
 
 检测到目标时，插件只输出一行摘要：
 
@@ -72,13 +74,25 @@ SDK 头文件已经复制到 msp_sdk/include。AX650N 动态库通常位于板�
 
   [INFO] output video: /tmp/output_boxed.mp4, frames: 300
 
-也支持原来的位置参数：
-
-  debug_demo 输入视频 输出视频 AXModel 文件
-
 可选插件参数：
 
   --plugin ./libmanhole_plugin.so
+
+RTSP 输入和输出：
+
+  ./debug_demo \
+    --input rtsp://192.168.0.129:8554/src_in \
+    --output rtsp://192.168.0.129:8554/ai_out \
+    --model /tmp/manhole-cover-yolo11s-production.axmodel \
+    --conf-thres 0.25 \
+    --iou-thres 0.45 \
+    --encoder libx264
+
+RTSP 模式由 FFmpeg 从 stdin 接收绘制后的 BGR 帧，再编码为 H.264 推送到
+MediaMTX；AX650 不使用 RK3588 的 `h264_rkmpp`。运行前确认板端 FFmpeg
+包含所选编码器：
+
+  ffmpeg -encoders | grep libx264
 
 五、处理流程
 
@@ -91,14 +105,15 @@ SDK 头文件已经复制到 msp_sdk/include。AX650N 动态库通常位于板�
   7. 调用插件 Inference。
   8. 将 AI_RESULT_T 的归一化坐标转换为视频像素坐标。
   9. 使用 OpenCV 绘制矩形框、类别和置信度。
- 10. 写出新的 MP4 文件。
+ 10. 离线模式写出新的 MP4 文件；RTSP 模式写入 FFmpeg 管道。
  11. 释放 AX 内存、模型、插件、AX_ENGINE 和 AX_SYS。
 
 六、输入要求
 
 视频宽度和高度必须是正偶数，例如 1920x1080、1280x720、640x480。程序保持输入视频分辨率和帧率，输出视频不保留音频。
 
-输入视频编码需要当前板端 OpenCV videoio 支持，建议使用常见的 H.264 MP4。
+输入视频编码需要当前板端 OpenCV videoio 支持，建议使用常见的 H.264 MP4 或
+FLOW1 中的 RTSP 输入。输出 RTSP 模式不保留音频。
 
 七、接口约定
 
@@ -124,10 +139,16 @@ AI_OBJ_T 中的 x、y、w、h 是 0 到 1 的归一化坐标，表示左上角�
 
 查看模型是否返回 nObjSize 大于 0。nObjSize 为 0 表示当前帧没有超过置信度阈值的检测结果。
 
-4. 输出视频无法打开
+4. RTSP 输出没有画面
+
+确认 `--output` 是 `rtsp://` URL，MediaMTX 正在运行，主机防火墙已放行
+8554/tcp，并检查 `ffmpeg -encoders | grep libx264`。查看程序打印的
+`[INFO] ffmpeg command` 和 FFmpeg warning。
+
+5. 输出视频无法打开
 
 确认 OpenCV videoio 构建时包含 FFmpeg 或板端支持的 MP4 编码器。
 
-5. 程序直接退出
+6. 程序直接退出
 
 必须检查 stderr。程序现在会打印参数错误、插件加载错误、模型初始化错误、AX 内存分配错误和推理错误。常见原因是没有传入 --input、--output、--model，或者运行目录不是 bin 导致找不到 libmanhole_plugin.so。

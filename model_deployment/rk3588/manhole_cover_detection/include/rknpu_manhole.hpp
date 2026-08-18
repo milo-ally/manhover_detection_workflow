@@ -44,6 +44,9 @@ private:
     int input_channels_ = 0;
     int output_channels_ = 0;
     int output_anchors_ = 0;
+    bool output_channel_first_ = false;
+    mutable bool output_debug_printed_ = false;
+    mutable bool no_detection_debug_printed_ = false;
     std::vector<uint8_t> model_data_;
 };
 

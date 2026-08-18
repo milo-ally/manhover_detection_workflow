@@ -47,7 +47,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ```
 
-工程优先查找 `OpenCVConfig.cmake`，找不到时会自动回退到 `pkg-config`。如果 OpenCV 是自定义安装，使用：
+工程只查找实际使用的 OpenCV `core`、`imgproc` 和 `videoio` 模块，不要求完整的 OpenCV 模块集合。如果 OpenCV 是自定义安装，使用：
 
 ```bash
 cmake -S . -B build \
@@ -66,10 +66,12 @@ file rknpu2/lib/librknnrt.so
 
 ```bash
 ./bin/debug_demo \
-  models/manhole-cover-yolo11s-production.rknn \
-  input.mp4 \
-  output_manhole.mp4 \
-  0.25 0.45 100
+  --model models/manhole-cover-yolo11s-production.rknn \
+  --input input.mp4 \
+  --output output_manhole.mp4 \
+  --conf-thres 0.25 \
+  --iou-thres 0.45 \
+  --max-det 100
 ```
 
 启动时应打印模型输入输出属性。程序默认使用：

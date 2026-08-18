@@ -130,9 +130,11 @@ bool ManholeRknn::init(const std::string &model_path) {
     if (first == kBoxFields + kClassCount) {
         output_channels_ = first;
         output_anchors_ = second;
+        output_channel_first_ = true;
     } else if (second == kBoxFields + kClassCount) {
         output_channels_ = second;
         output_anchors_ = first;
+        output_channel_first_ = false;
     } else {
         std::cerr << "expected output with 9 channels, got dims="
                   << first << "x" << second << std::endl;
@@ -152,6 +154,9 @@ void ManholeRknn::release() {
     output_attr_ = {};
     input_width_ = input_height_ = input_channels_ = 0;
     output_channels_ = output_anchors_ = 0;
+    output_channel_first_ = false;
+    output_debug_printed_ = false;
+    no_detection_debug_printed_ = false;
 }
 
 bool ManholeRknn::prepare_input(const cv::Mat &bgr, cv::Mat &letterboxed,
@@ -212,11 +217,31 @@ bool ManholeRknn::decode_output(const float *output, size_t float_count,
     candidates.reserve(output_anchors_);
 
     auto value = [&](int channel, int anchor) {
-        if (output_attr_.n_dims == 3 && output_attr_.dims[1] == output_channels_) {
+        if (output_channel_first_) {
             return output[static_cast<size_t>(channel) * output_anchors_ + anchor];
         }
         return output[static_cast<size_t>(anchor) * output_channels_ + channel];
     };
+
+    if (!output_debug_printed_) {
+        float minimum = output[0];
+        float maximum = output[0];
+        for (size_t i = 1; i < static_cast<size_t>(output_channels_) * output_anchors_; ++i) {
+            minimum = std::min(minimum, output[i]);
+            maximum = std::max(maximum, output[i]);
+        }
+        std::cerr << "output decode: floats=" << float_count
+                  << " channels=" << output_channels_
+                  << " anchors=" << output_anchors_
+                  << " layout=" << (output_channel_first_ ? "[channels,anchors]" : "[anchors,channels]")
+                  << " range=[" << minimum << "," << maximum << "]"
+                  << " sample_scores=" << value(4, 0) << "," << value(5, 0)
+                  << "," << value(6, 0) << "," << value(7, 0)
+                  << "," << value(8, 0) << std::endl;
+        output_debug_printed_ = true;
+    }
+
+    int score_candidates = 0;
     for (int anchor = 0; anchor < output_anchors_; ++anchor) {
         int class_id = 0;
         float score = value(4, anchor);
@@ -230,6 +255,7 @@ bool ManholeRknn::decode_output(const float *output, size_t float_count,
         if (!std::isfinite(score) || score < conf_threshold) {
             continue;
         }
+        ++score_candidates;
         const float cx = value(0, anchor);
         const float cy = value(1, anchor);
         const float width = value(2, anchor);
@@ -278,6 +304,12 @@ bool ManholeRknn::decode_output(const float *output, size_t float_count,
                 suppressed[other] = true;
             }
         }
+    }
+    if (!no_detection_debug_printed_ && detections.empty()) {
+        std::cerr << "output decode: candidates_above_conf=" << score_candidates
+                  << ", detections_after_nms=0, conf_threshold=" << conf_threshold
+                  << ", iou_threshold=" << iou_threshold << std::endl;
+        no_detection_debug_printed_ = true;
     }
     return true;
 }

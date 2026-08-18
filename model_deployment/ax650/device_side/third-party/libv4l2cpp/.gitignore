@@ -1,7 +1,0 @@
-src/*.o
-*.a
-*.cmake
-CMakeCache.txt
-CMakeFiles/
-libv4l2cpptest
-Makefile
