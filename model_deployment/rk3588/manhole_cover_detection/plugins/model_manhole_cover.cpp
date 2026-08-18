@@ -187,18 +187,20 @@ bool ManholeRknn::prepare_input(const cv::Mat &bgr, cv::Mat &letterboxed,
     if (!rgb.isContinuous()) {
         rgb = rgb.clone();
     }
+    const size_t total_bytes = static_cast<size_t>(rgb.total()) * rgb.elemSize();
     if (input_attr_.fmt == RKNN_TENSOR_NHWC) {
-        nchw_buffer.assign(rgb.data, rgb.data + rgb.total() * rgb.elemSize());
+        nchw_buffer.assign(rgb.data, rgb.data + total_bytes);
     } else {
-        nchw_buffer.resize(rgb.total() * rgb.elemSize());
+        nchw_buffer.resize(total_bytes);
         const size_t plane = static_cast<size_t>(input_width_) * input_height_;
-        for (int c = 0; c < input_channels_; ++c) {
-            for (int y = 0; y < input_height_; ++y) {
-                for (int x = 0; x < input_width_; ++x) {
-                    nchw_buffer[static_cast<size_t>(c) * plane + y * input_width_ + x] =
-                        rgb.at<cv::Vec3b>(y, x)[c];
-                }
-            }
+        const uint8_t* __restrict__ src = rgb.ptr<uint8_t>(0);
+        uint8_t* __restrict__ dst_r = nchw_buffer.data();
+        uint8_t* __restrict__ dst_g = dst_r + plane;
+        uint8_t* __restrict__ dst_b = dst_g + plane;
+        for (size_t i = 0; i < plane; ++i) {
+            dst_r[i] = src[i * 3 + 0];
+            dst_g[i] = src[i * 3 + 1];
+            dst_b[i] = src[i * 3 + 2];
         }
     }
     return true;
