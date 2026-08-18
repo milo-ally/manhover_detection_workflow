@@ -69,14 +69,14 @@ python scripts/make_calibration_list.py
 校准图片存放在本目录 `dataset/calib_images/`，校准列表也写入本目录。
 转换前应看到输入 `[1, 3, 640, 640]` 和输出 `[1, 9, 8400]`。
 
-## 4. 转换 INT8 RKNN
+## 4. 转换部署用 FP RKNN
 
 ```bash
 python scripts/convert_rknn.py \
   --onnx models/manhole-cover-yolo11s-production.onnx \
   --dataset dataset/calibration.txt \
   --output output/manhole-cover-yolo11s-production.rknn \
-  --dtype i8
+  --dtype fp
 ```
 
 本次实际结果：转换成功，生成约 12 MB 的 RKNN 文件。转换使用：
@@ -84,12 +84,14 @@ python scripts/convert_rknn.py \
 ```python
 rknn.config(mean_values=[[0, 0, 0]], std_values=[[255, 255, 255]],
             target_platform="rk3588")
-rknn.build(do_quantization=True, dataset="dataset/calibration.txt")
+rknn.build(do_quantization=False)
 ```
 
-Toolkit2 会提示量化模型的输入和输出默认改为 `INT8`。Python Lite 通常由
-Runtime 负责量化/反量化；后续 C/C++ 部署必须查询输入输出 tensor 属性，或在
-`rknn_outputs_get` 中设置 `want_float = 1`，不能直接假设输出仍是 FP32。
+FP 产物保留类别分数的精度。C/C++ 部署仍应查询输入输出 tensor 属性，并在
+`rknn_outputs_get` 中设置 `want_float = 1` 获取浮点输出。
+
+如果显式使用 `--dtype i8`，不要直接用于当前部署；坐标和类别分数共用输出量化
+范围，可能出现类别分数全部为 0 的情况。
 
 ## 5. 交付到模型验证
 
