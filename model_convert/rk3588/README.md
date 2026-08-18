@@ -18,8 +18,9 @@
 output/manhole-cover-yolo11s-production.rknn
 ```
 
-这是 INT8 RKNN；Toolkit2 日志显示输入和 `output0` 默认类型均改为 INT8，后续
-C/C++ 运行时必须按 tensor 属性处理量化参数，不能假设输出仍是 FP32。
+部署默认使用 FP RKNN。该模型的 `output0` 同时包含像素坐标和 `0~1` 类别分数，
+整张输出做 INT8 量化时容易因坐标动态范围过大而把类别分数压成 0；因此当前
+C/C++ 部署不要使用 INT8 产物。INT8 仍可用 `--dtype i8` 显式生成用于实验。
 
 完整命令见 `SOP.md`。工具仓库放在 `third_party/`，已由 `.gitignore` 忽略；
 仓库地址、提交号和 wheel 版本均写在 SOP 中，不依赖未记录的本地环境。

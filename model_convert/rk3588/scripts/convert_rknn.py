@@ -10,7 +10,7 @@ def main():
     parser.add_argument("--onnx", required=True)
     parser.add_argument("--dataset", default="dataset/calibration.txt")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--dtype", choices=("i8", "fp"), default="i8")
+    parser.add_argument("--dtype", choices=("i8", "fp"), default="fp")
     args = parser.parse_args()
 
     output = Path(args.output)
