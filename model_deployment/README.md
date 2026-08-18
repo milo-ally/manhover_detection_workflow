@@ -431,3 +431,42 @@ bin/libmanhole_cover_plugin.so
 bin/libaxdl_lib.so
 bin/libByteTrack.so
 ```
+
+## 11. 临时 MP4 文件推理模式（考核用）
+
+`device_ai_demo` 额外提供了一个临时的 MP4 离线推理模式。该模式读取 MP4 文件，调用现有井盖检测插件，将 `AI_RESULT_T` 中的检测框、类别和置信度绘制到视频帧，然后输出新的 MP4 文件。它不启动 RTSP、MediaMTX 或实时视频流。
+
+README 中对应的临时代码均使用以下注释标记，考核完成后可按标记整体删除：
+
+```cpp
+// ===== TEMP_MP4_INFERENCE_BEGIN
+// ===== TEMP_MP4_INFERENCE_END
+```
+
+使用前需要重新编译 `device_ai_demo`，并确认输入 MP4、模型文件和输出目录在板端可访问：
+
+```bash
+cd /root/device_side
+cmake -S . -B build
+cmake --build build -j$(nproc)
+cmake --install build
+
+cd bin
+export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
+./device_ai_demo --mp4-in test.mp4 --mp4-out test_boxed.mp4 --mp4-model ../models/yolo11s-manhole-detection.axmodel
+```
+
+处理完成后检查：
+
+```text
+/tmp/manhole_output_boxed.mp4
+```
+
+日志中应看到：
+
+```text
+[TEMP_MP4] processed frame=30 detections=...
+[TEMP_MP4] completed: frames=... output=/tmp/manhole_output_boxed.mp4
+```
+
+如果 `detections=0`，输出视频会生成但不会出现检测框；此时应先查看井盖插件的 `DEBUG` 日志，确认模型是否加载成功以及 `AI_RESULT_T.nObjSize` 是否大于 0。

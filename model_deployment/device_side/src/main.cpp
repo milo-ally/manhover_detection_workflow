@@ -13,8 +13,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <thread>
-#include "manager/video_stream_manager.h" 
+#include <opencv2/opencv.hpp>
+#include "manager/video_stream_manager.h"
 #include "manager/config_service.h"
+#include "manager/ai_processor.h"
 #include "manager/alarm_filter.h"
 #include "utilities/sample_log.h"  
 #include "ax_engine_api.h"
@@ -32,6 +34,117 @@ extern "C" AX_VOID __sigExit(int iSigNo) {
     ALOGN("Catch signal %d, exiting...", iSigNo);
     gLoopExit = 1;
 }
+
+// ===== TEMP_MP4_INFERENCE_BEGIN: 临时 MP4 推理考核模式，后续可整体删除 =====
+static bool bgr_to_nv12_for_temp_mp4(const cv::Mat& bgr, std::vector<uint8_t>& nv12) {
+    if (bgr.empty() || bgr.type() != CV_8UC3 || (bgr.cols % 2) != 0 || (bgr.rows % 2) != 0) {
+        return false;
+    }
+
+    cv::Mat yuv_i420;
+    cv::cvtColor(bgr, yuv_i420, cv::COLOR_BGR2YUV_I420);
+    const size_t y_size = static_cast<size_t>(bgr.cols) * bgr.rows;
+    const size_t uv_size = y_size / 2;
+    nv12.resize(y_size + uv_size);
+    memcpy(nv12.data(), yuv_i420.data, y_size);
+
+    const uint8_t* u_plane = yuv_i420.data + y_size;
+    const uint8_t* v_plane = u_plane + y_size / 4;
+    uint8_t* uv_plane = nv12.data() + y_size;
+    for (size_t i = 0; i < y_size / 4; ++i) {
+        uv_plane[i * 2] = u_plane[i];
+        uv_plane[i * 2 + 1] = v_plane[i];
+    }
+    return true;
+}
+
+static int run_temp_mp4_inference(const std::string& input_path,
+                                  const std::string& output_path,
+                                  const std::string& model_path) {
+    ALOGN("[TEMP_MP4] input=%s output=%s model=%s",
+          input_path.c_str(), output_path.c_str(), model_path.c_str());
+
+    cv::VideoCapture reader(input_path);
+    if (!reader.isOpened()) {
+        ALOGE("[TEMP_MP4] Failed to open input MP4: %s", input_path.c_str());
+        return -1;
+    }
+
+    const int width = static_cast<int>(reader.get(cv::CAP_PROP_FRAME_WIDTH));
+    const int height = static_cast<int>(reader.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double fps = reader.get(cv::CAP_PROP_FPS);
+    if (fps <= 0.0 || fps > 240.0) fps = 25.0;
+    if (width <= 0 || height <= 0 || (width % 2) != 0 || (height % 2) != 0) {
+        ALOGE("[TEMP_MP4] Unsupported video size: %dx%d; width/height must be even", width, height);
+        return -1;
+    }
+
+    cv::VideoWriter writer;
+    const int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+    if (!writer.open(output_path, fourcc, fps, cv::Size(width, height), true)) {
+        ALOGE("[TEMP_MP4] Failed to open output MP4: %s", output_path.c_str());
+        return -1;
+    }
+
+    AIProcessor processor(model_path, "manhole_cover",
+                          nlohmann::json{{"conf_threshold", 0.25},
+                                         {"nms_threshold", 0.45}});
+    if (!processor.isModelLoaded()) {
+        ALOGE("[TEMP_MP4] Manhole model failed to load");
+        return -1;
+    }
+
+    cv::Mat bgr;
+    std::vector<uint8_t> nv12;
+    // 使用 unsigned long long 与日志中的 %llu 保持一致，兼容 ARM64 Linux。
+    unsigned long long frame_index = 0;
+    while (reader.read(bgr)) {
+        ++frame_index;
+        if (!bgr_to_nv12_for_temp_mp4(bgr, nv12)) {
+            ALOGE("[TEMP_MP4] Failed to convert frame %llu to NV12", frame_index);
+            return -1;
+        }
+
+        AX_VIDEO_FRAME_T frame = {};
+        frame.u32Width = static_cast<AX_U32>(width);
+        frame.u32Height = static_cast<AX_U32>(height);
+        frame.u32PicStride[0] = static_cast<AX_U32>(width);
+        frame.u32FrameSize = static_cast<AX_U32>(nv12.size());
+        frame.enImgFormat = AX_FORMAT_YUV420_SEMIPLANAR;
+        frame.u64VirAddr[0] = reinterpret_cast<AX_U64>(nv12.data());
+        frame.u64VirAddr[1] = reinterpret_cast<AX_U64>(nv12.data() + width * height);
+
+        AI_RESULT_T result = {};
+        const bool ok = processor.processFrame(&frame, &result);
+        if (!ok) {
+            ALOGW("[TEMP_MP4] Inference failed at frame %llu; writing frame without boxes", frame_index);
+        } else {
+            for (AX_U32 i = 0; i < result.nObjSize && i < MAX_DETECT_OBJ_NUM; ++i) {
+                const AI_OBJ_T& obj = result.objects[i];
+                const int x = std::max(0, std::min(width - 1, static_cast<int>(obj.x * width)));
+                const int y = std::max(0, std::min(height - 1, static_cast<int>(obj.y * height)));
+                const int w = std::max(1, std::min(width - x, static_cast<int>(obj.w * width)));
+                const int h = std::max(1, std::min(height - y, static_cast<int>(obj.h * height)));
+                cv::rectangle(bgr, cv::Rect(x, y, w, h), cv::Scalar(0, 255, 0), 2);
+                char text[96] = {0};
+                snprintf(text, sizeof(text), "%s %.2f", obj.label, obj.score);
+                cv::putText(bgr, text, cv::Point(x, std::max(20, y - 5)),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+            }
+        }
+        writer.write(bgr);
+        if (frame_index % 30 == 0) {
+            ALOGN("[TEMP_MP4] processed frame=%llu detections=%u",
+                  frame_index, static_cast<unsigned int>(result.nObjSize));
+        }
+    }
+
+    writer.release();
+    reader.release();
+    ALOGN("[TEMP_MP4] completed: frames=%llu output=%s", frame_index, output_path.c_str());
+    return 0;
+}
+// ===== TEMP_MP4_INFERENCE_END =====
 
 static bool has_annexb_start_code(const uint8_t* data, int len) {
     if (!data || len < 4) return false;
@@ -86,6 +199,26 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, __sigExit);
 
     int ret = 0;
+    // ===== TEMP_MP4_INFERENCE_BEGIN: 临时 MP4 参数，仅用于考核 =====
+    std::string temp_mp4_input;
+    std::string temp_mp4_output;
+    std::string temp_mp4_model = "../models/manhole-cover-yolo11s-production.axmodel";
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--mp4-in") == 0 && i + 1 < argc) {
+            temp_mp4_input = argv[++i];
+        } else if (strcmp(argv[i], "--mp4-out") == 0 && i + 1 < argc) {
+            temp_mp4_output = argv[++i];
+        } else if (strcmp(argv[i], "--mp4-model") == 0 && i + 1 < argc) {
+            temp_mp4_model = argv[++i];
+        }
+    }
+    const bool temp_mp4_mode = !temp_mp4_input.empty() || !temp_mp4_output.empty();
+    if (temp_mp4_mode && (temp_mp4_input.empty() || temp_mp4_output.empty())) {
+        fprintf(stderr, "Usage: %s --mp4-in input.mp4 --mp4-out output_boxed.mp4 [--mp4-model model.axmodel]\n", argv[0]);
+        return -1;
+    }
+    // ===== TEMP_MP4_INFERENCE_END =====
+
     char input_source[256] = "test.h264";
     std::vector<std::string> input_sources;
 
@@ -208,6 +341,15 @@ int main(int argc, char *argv[]) {
         COMMON_SYS_DeInit();
         return -1;
     }
+
+    // ===== TEMP_MP4_INFERENCE_BEGIN: 临时 MP4 分支，不启动 RTSP/MediaMTX =====
+    if (temp_mp4_mode) {
+        ret = run_temp_mp4_inference(temp_mp4_input, temp_mp4_output, temp_mp4_model);
+        AX_ENGINE_Deinit();
+        COMMON_SYS_DeInit();
+        return ret;
+    }
+    // ===== TEMP_MP4_INFERENCE_END =====
 
     // 配置服务，监控配置文件变化
     ConfigService configService("/dev/shm/ai_config.json");
