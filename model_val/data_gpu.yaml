@@ -1,7 +1,0 @@
-# YOLO detection validation dataset
-path: .
-val: images/val
-labels: labels/val
-
-nc: 5
-names: [good, broke, lose, uncovered, circle]

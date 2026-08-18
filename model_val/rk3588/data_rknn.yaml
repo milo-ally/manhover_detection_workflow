@@ -1,0 +1,6 @@
+path: .
+val: images
+labels: labels
+
+nc: 5
+names: [good, broke, lose, uncovered, circle]

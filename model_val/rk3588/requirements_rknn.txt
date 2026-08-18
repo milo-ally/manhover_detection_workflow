@@ -1,0 +1,4 @@
+# Install the matching aarch64 rknn_toolkit_lite2 wheel from SOP.md.
+numpy>=1.26,<2
+opencv-python-headless>=4.8
+PyYAML>=6,<7

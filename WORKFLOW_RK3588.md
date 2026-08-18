@@ -1,0 +1,236 @@
+# RK3588 完整工作流
+
+本文档是 RK3588 的独立复现入口，覆盖 ONNX 准备、RKNN INT8 转换、验证和 C/C++ 离线视频部署。
+
+## 0. 固定约定
+
+```text
+模型名:       manhole-cover-yolo11s-production
+类别顺序:     0 good, 1 broke, 2 lose, 3 uncovered, 4 circle
+输入尺寸:     640 x 640
+ONNX 输入:    images [1,3,640,640] FP32 NCHW RGB / 255
+RKNN 输入:    由 Runtime 查询实际格式，当前程序兼容 NCHW/NHWC
+输出:         output0 [1,9,8400]
+输出解释:     0..3 为 cx/cy/w/h，4..8 为五个类别分数
+```
+
+RK3588 的文件、数据集、模型、Runtime、文档和代码均在各自目录中独立保存：
+
+```text
+RKNN 转换:   model_convert/rk3588/
+RKNN 验证:   model_val/rk3588/
+C/C++ 部署:  model_deployment/rk3588/manhole_cover_detection/
+```
+
+不要从其他平台目录加载模型或量化/验证数据。当前 RK3588 目录已经复制了自己的 ONNX、72 张校准图片、11 张验证图片、标签和 RKNN 模型。
+
+## 1. 训练和 ONNX 来源
+
+训练和导出使用仓库根目录的通用流程：
+
+```bash
+cd /home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow/model_train
+python 1-download_dataset.py
+python 2-data-preprocessing.py
+python 4-check-dataset.py
+python 5-train.py
+python 6-evaluate.py
+python 7-test.py
+
+cd ../model_export
+python 1-export.py
+python 2-verify.py
+```
+
+导出产物为：
+
+```text
+model_export/model/manhole-cover-yolo11s-production.onnx
+```
+
+RK3588 转换目录中的 ONNX 是独立副本：
+
+```text
+model_convert/rk3588/models/manhole-cover-yolo11s-production.onnx
+```
+
+重新导出模型后，应明确复制新的 ONNX 到 RK3588 的 `models/`，然后重新生成校准列表、转换和验证，不要在脚本中跨目录动态加载。
+
+## 2. RKNN 转换
+
+### 2.1 官方工具和版本
+
+使用 Rockchip 官方仓库：
+
+- RKNN-Toolkit2：<https://github.com/airockchip/rknn-toolkit2.git>
+- RKNN Model Zoo：<https://github.com/airockchip/rknn_model_zoo.git>
+
+当前实际版本：
+
+```text
+RKNN-Toolkit2: 2.3.2
+rknn-toolkit2 commit: 59a913d172e7f5ff03c9076e2ec7b1b1288ffd08
+```
+
+依赖仓库放在 `model_convert/rk3588/third_party/`，已被 `.gitignore` 忽略；重新准备时必须按 [model_convert/rk3588/SOP.md](model_convert/rk3588/SOP.md) 记录的仓库和版本执行。
+
+### 2.2 主机环境
+
+当前转换主机为 x86_64、Python 3.12：
+
+```bash
+cd /home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow/model_convert/rk3588
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install --index-url https://download.pytorch.org/whl/cpu \
+  --trusted-host download.pytorch.org torch==2.4.0+cpu
+pip install --no-deps packages/rknn_toolkit2-2.3.2-cp312-cp312-linux_x86_64.whl
+```
+
+关键版本：`onnx==1.16.1`、`protobuf==4.25.4`、`numpy==1.26.4`。
+
+### 2.3 校准集、检查和转换
+
+校准图片已经独立复制到：
+
+```text
+model_convert/rk3588/dataset/calib_images/
+```
+
+从 `model_convert/rk3588/` 执行：
+
+```bash
+.venv/bin/python scripts/make_calibration_list.py
+.venv/bin/python scripts/inspect_onnx.py \
+  models/manhole-cover-yolo11s-production.onnx
+.venv/bin/python scripts/convert_rknn.py \
+  --onnx models/manhole-cover-yolo11s-production.onnx \
+  --dataset dataset/calibration.txt \
+  --output output/manhole-cover-yolo11s-production.rknn \
+  --dtype i8
+```
+
+校准列表应包含 72 张本地图片，ONNX 检查应显示：
+
+```text
+input images [1, 3, 640, 640]
+output output0 [1, 9, 8400]
+onnx checker: OK
+```
+
+真实转换产物：
+
+```text
+model_convert/rk3588/output/manhole-cover-yolo11s-production.rknn
+```
+
+转换完成后复制到验证目录：
+
+```bash
+cp output/manhole-cover-yolo11s-production.rknn \
+  ../../model_val/rk3588/models/
+```
+
+Toolkit2 会提示输入和输出默认量化为 INT8。C/C++ 程序必须查询 tensor 属性，并通过 `want_float=1` 或量化参数正确处理输出。
+
+## 3. RKNN 精度验证
+
+### 3.1 主机 ONNX 基线
+
+验证数据是 `model_val/rk3588/images/` 和 `model_val/rk3588/labels/` 的本地副本，ONNX 也位于 `model_val/rk3588/models/`。
+
+```bash
+cd /home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow/model_val/rk3588
+../../model_convert/rk3588/.venv/bin/python \
+  src/val_detect_manhole_onnx.py \
+  --onnx models/manhole-cover-yolo11s-production.onnx \
+  --data data_rknn.yaml \
+  --limit 0
+```
+
+当前已实际通过 11 张图片、19 个目标的 ONNX 基线：
+
+```text
+mAP50:    0.7397
+mAP50-95: 0.3838
+```
+
+### 3.2 RKNN Lite 板端验证
+
+板端需要 Python、与 Python 版本匹配的 `rknn_toolkit_lite2` wheel 和 `requirements_rknn.txt`。本目录的 Lite wheel 来自官方 Toolkit2 2.3.2，aarch64 文件位于 `model_val/rk3588/packages/`。
+
+将整个 `model_val/rk3588/` 复制到 RK3588 板端后执行：
+
+```bash
+cd model_val/rk3588
+pip3 install rknn_toolkit_lite2-2.3.2-*.whl
+pip3 install -r requirements_rknn.txt
+python3 src/val_detect_manhole_rknn.py \
+  --rknn models/manhole-cover-yolo11s-production.rknn \
+  --data data_rknn.yaml \
+  --conf-thres 0.001 \
+  --iou-thres 0.7
+```
+
+结果保存到 `runs/`。将 RKNN 指标与 ONNX 基线比较，建议 mAP50 和 mAP50-95 的绝对下降均不超过 `0.01`，并人工检查困难样本。
+
+主机没有 RK3588 NPU，因此主机只能完成 ONNX 验证和 RKNN 编译；不能把主机结果称为 NPU 精度验证。
+
+## 4. C/C++ 离线视频部署
+
+### 4.1 工程结构
+
+```text
+model_deployment/rk3588/manhole_cover_detection/
+├── CMakeLists.txt
+├── include/rknpu_manhole.hpp
+├── plugins/model_manhole_cover.cpp
+├── src/main.cpp
+├── models/manhole-cover-yolo11s-production.rknn
+└── rknpu2/
+    ├── include/rknn_api.h
+    └── lib/librknnrt.so
+```
+
+该工程参考官方 YOLO11 C++ 示例的 RKNN API 调用方式，但当前模型是单输出 `[1,9,8400]`，因此后处理按当前五分类输出实现，不能直接套用三分支 DFL 后处理。
+
+### 4.2 编译
+
+编译环境需要 AArch64 C++ 编译器、CMake、OpenCV `core/imgproc/videoio` 和 RKNN Runtime：
+
+```bash
+cd /path/to/LYG_manhover_detection_workflow/model_deployment/rk3588/manhole_cover_detection
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j2
+file rknpu2/lib/librknnrt.so
+```
+
+Runtime 应为 ARM aarch64。若使用交叉编译器，可通过 CMake toolchain 文件指定编译器和 sysroot。
+
+### 4.3 输入视频推理和保存
+
+```bash
+./bin/debug_demo \
+  models/manhole-cover-yolo11s-production.rknn \
+  input.mp4 \
+  output_manhole.mp4 \
+  0.25 0.45 100
+```
+
+参数依次为模型、输入视频、输出视频、置信度阈值、NMS IoU 阈值和最大检测数。程序逐帧读取视频、RGB letterbox、RKNN 推理、解码/NMS、绘制检测框并保存输出视频。
+
+后续接入告警、推流或插件时，在 `src/main.cpp` 中 `detector.infer()` 返回后使用 `frame` 和 `detections`；先保持离线视频链路稳定，再替换输入输出模块。
+
+## 5. 交付检查
+
+```text
+[ ] RK3588 ONNX、校准集、验证集和模型均为本目录独立副本
+[ ] 校准列表为本地 72 张图片
+[ ] RKNN Toolkit2 转换成功，output0 [1,9,8400]
+[ ] 主机 ONNX 基线完成
+[ ] RK3588 板端 RKNN Lite 精度验证完成
+[ ] C++ 程序在板端成功编译
+[ ] 离线输入视频成功生成带框输出视频
+[ ] 记录平均/P95 推理耗时、内存和连续运行稳定性
+```
