@@ -140,17 +140,19 @@ if(dlib_FOUND)
     target_compile_definitions(face_recognition_plugin PRIVATE HAS_DLIB_LANDMARK=1)
 endif()
 
-
 # 為了向後兼容，創建符號鏈接或別名
 add_library(yolo_plugin SHARED plugins/model_helmet.cpp)
 target_link_libraries(yolo_plugin axdl_lib ByteTrack ${OpenCV_LIBS})
 
 # Generic AI runtime entrypoint. The previous target name was demo_helmet.
 add_executable(device_ai_demo ${SRC_APP} ${SRC_LIST_LIBS})
-add_executable(face_enroll src/tools/face_enroll.cpp)
-target_sources(face_enroll PRIVATE
-    ${COMMON_DIR}/common_sys.c
-)
+
+# ============ face_enroll 已禁用（井盖检测不需要） ============
+# add_executable(face_enroll src/tools/face_enroll.cpp)
+# target_sources(face_enroll PRIVATE
+#     ${COMMON_DIR}/common_sys.c
+# )
+# ==============================================================
 
 set(AX_LIBS ax_sys ax_vdec ax_ivps ax_venc ax_vo ax_mipi ax_3a ax_proton ax_nt_stream ax_nt_ctrl ax_engine ax_interpreter)
 set(DEMUX_LIBS avformat avcodec avutil swresample)
@@ -165,19 +167,21 @@ target_link_libraries(device_ai_demo
     ${SYS_LIBS}
 )
 
-target_link_libraries(face_enroll
-    ${AX_LIBS}
-    ${OpenCV_LIBS}
-    ${SYS_LIBS}
-)
-if(dlib_FOUND)
-    target_link_libraries(face_enroll dlib::dlib)
-else()
-    message(WARNING "dlib not found: face_enroll build may fail due to missing landmark dependency")
-endif()
+# ============ face_enroll 链接库（已禁用） ============
+# target_link_libraries(face_enroll
+#     ${AX_LIBS}
+#     ${OpenCV_LIBS}
+#     ${SYS_LIBS}
+# )
+# if(dlib_FOUND)
+#     target_link_libraries(face_enroll dlib::dlib)
+# else()
+#     message(WARNING "dlib not found: face_enroll build may fail due to missing landmark dependency")
+# endif()
+# =====================================================
 
 install(TARGETS device_ai_demo DESTINATION bin)
-install(TARGETS face_enroll DESTINATION bin)
+# install(TARGETS face_enroll DESTINATION bin)  # 已禁用
 install(TARGETS yolo_plugin DESTINATION bin)
 install(TARGETS helmet_plugin DESTINATION bin)
 install(TARGETS fall_plugin DESTINATION bin)
