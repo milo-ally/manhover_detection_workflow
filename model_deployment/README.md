@@ -286,7 +286,50 @@ export LD_LIBRARY_PATH=$PWD:/root/device_side/bin:/soc/lib:/usr/lib:$LD_LIBRARY_
 
 如果从源码目录运行，注意配置中的 `../models/*.axmodel` 是相对当前工作目录解析的，通常应从 `bin/` 启动。
 
-## 8. 跑通标准
+## 8. 检测框和 OSD 显示说明
+
+井盖插件本身不直接在视频帧上画框。它在 `Inference()` 中完成推理和后处理，将检测结果写入 `AI_RESULT_T`，包括归一化的 `x/y/w/h`、类别和置信度。
+
+真实板端运行时，`VideoStreamManager` 为每路输入创建两条逻辑链路：
+
+```text
+输入 RTSP
+   ├── AI 分支：送入 AIProcessor，得到 AI_RESULT_T
+   └── 主输出分支：送入 MediaMTX
+                    ↑
+          VideoStreamManager 将 AI_RESULT_T
+          交给 DefaultOSDRenderer
+          通过 AX_IVPS_RGN_Update() 叠加矩形框和标签
+```
+
+因此，检测框应当在主 MediaMTX 输出流中查看，而不是在 AI 推理分支或原始输入流中查看。配置中的 `enable_ai: true` 只表示启用推理；要看到框，还必须完成 OSD 初始化，并且当前帧至少检测到一个目标（`AI_RESULT_T.nObjSize > 0`）。井盖模型当前没有专用 OSD Renderer，会使用通用 `DefaultOSDRenderer` 绘制矩形框、类别和置信度。
+
+`run_demo.py` 不能用于验证画框。它只是读取 `/dev/shm/ai_config.json` 并模拟配置处理，不加载 `.axmodel`、不执行 AX Engine 推理，也不启动视频 OSD 或 MediaMTX 输出。画框验证必须使用真实的 `device_ai_demo` 和板端运行库。
+
+启动前确认：
+
+```text
+device_side/models/manhole-cover-yolo11s-production.axmodel 存在
+device_side/bin/device_ai_demo 存在
+device_side/bin/libmanhole_cover_plugin.so 存在
+LD_LIBRARY_PATH 包含 bin、/soc/lib 和 /usr/lib
+未设置 AX_DISABLE_OSD=1
+```
+
+建议按以下日志确认画框链路：
+
+```text
+Using manhole cover plugin
+Model initialized successfully
+Using default OSD renderer
+Initialized OSD management
+Updated AI result
+AX_IVPS_RGN_Update success
+```
+
+其中，只有看到 `nObjSize > 0` 的检测结果时才会实际更新目标框；如果模型运行正常但没有检测到目标，视频中不会出现框，这不代表 OSD 链路失效。
+
+## 9. 跑通标准
 
 日志必须看到：
 
@@ -310,11 +353,21 @@ output0 contains NaN/Inf
 1. 单张图片：model_convert/pulsar2_sim 结果正常
 2. 精度：model_val 中 ONNX 和 AXModel mAP 对比通过
 3. 板端：device_ai_demo 能加载 .axmodel 和插件
-4. 实流：OSD 框、类别、置信度和仿真/验证结果基本一致
+4. 实流：在主 MediaMTX 输出流中确认 OSD 框、类别、置信度和仿真/验证结果基本一致
 5. 稳定性：连续推理至少 100 次，记录平均延迟、P95 延迟、峰值内存和异常次数
 ```
 
-## 9. 最短 SOP
+如果实流中看不到框，按以下顺序排查：
+
+```text
+1. 确认查看的是主 MediaMTX 输出流，而不是原始输入流或 AI 分支
+2. 确认日志中出现 OSD 初始化和 AX_IVPS_RGN_Update success
+3. 确认 AI_RESULT_T.nObjSize > 0，排除当前画面确实没有达到阈值的目标
+4. 确认没有设置 AX_DISABLE_OSD=1
+5. 确认模型路径、插件路径和 LD_LIBRARY_PATH 正确
+```
+
+## 10. 最短 SOP
 
 已写入的代码和作用：
 

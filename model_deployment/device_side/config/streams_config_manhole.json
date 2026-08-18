@@ -16,7 +16,7 @@
                 {
                     "_comment": "Manhole-cover five-class AXModel; plugin selected by name=manhole_cover.",
                     "name": "manhole_cover",
-                    "path": "../models/manhole-cover-yolo11s-production.axmodel",
+                    "path": "../models/yolo11s-manhole-detection.axmodel",
                     "conf_threshold": 0.25,
                     "nms_threshold": 0.45
                 }
