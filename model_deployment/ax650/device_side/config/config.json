@@ -1,0 +1,5 @@
+{
+    "rtsp_url": "rtsp://172.19.31.10:8554/lygstream1",
+    "ai_lib_path": "./libmodel_yolov5.so", 
+    "model_path": "/root/device_side/models/yolov5s.axmodel"
+}

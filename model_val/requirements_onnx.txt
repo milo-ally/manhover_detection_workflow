@@ -1,4 +1,0 @@
-numpy>=1.26,<3
-opencv-python-headless>=4.8
-PyYAML>=6,<7
-onnxruntime>=1.17,<2

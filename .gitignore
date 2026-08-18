@@ -85,3 +85,31 @@ model_val/runs/*
 !model_val/requirements*.txt
 !model_val/src_gpu/*.py
 !model_val/src_npu/*.py
+
+# RK3588 conversion/validation dependencies and generated artifacts
+model_convert/rk3588/.venv/
+model_convert/rk3588/third_party/
+model_val/rk3588/third_party/
+model_convert/rk3588/packages/
+model_convert/rk3588/output/*
+model_convert/rk3588/models/*
+model_convert/rk3588/dataset/*
+model_val/rk3588/packages/
+model_val/rk3588/runs/
+model_val/rk3588/models/*
+!model_convert/rk3588/output/.gitkeep
+!model_convert/rk3588/models/.gitkeep
+!model_convert/rk3588/dataset/.gitkeep
+!model_convert/rk3588/dataset/calib_images/
+model_convert/rk3588/dataset/calib_images/*
+!model_convert/rk3588/dataset/calib_images/.gitkeep
+!model_val/rk3588/models/.gitkeep
+model_val/rk3588/images/*
+model_val/rk3588/labels/*
+!model_val/rk3588/images/.gitkeep
+!model_val/rk3588/labels/.gitkeep
+
+# RK3588 C++ deployment dependencies and build output
+model_deployment/rk3588/manhole_cover_detection/build/
+model_deployment/rk3588/manhole_cover_detection/bin/
+model_deployment/rk3588/manhole_cover_detection/rknpu2/

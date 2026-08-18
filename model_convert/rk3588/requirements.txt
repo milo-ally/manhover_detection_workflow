@@ -1,0 +1,12 @@
+# RKNN Toolkit2 2.3.2 dependencies. Install the matching wheel from SOP.md.
+numpy==1.26.4
+protobuf==4.25.4
+onnx==1.16.1
+onnxruntime>=1.17,<2
+opencv-python>=4.5.5
+scipy>=1.9.3
+ruamel.yaml>=0.17.21
+PyYAML>=6,<7
+fast-histogram>=0.11
+psutil>=5.9
+tqdm>=4.64

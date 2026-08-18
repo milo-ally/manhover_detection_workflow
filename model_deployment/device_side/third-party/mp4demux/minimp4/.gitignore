@@ -1,7 +1,0 @@
-.vscode
-minimp4_*
-qemu-prof
-*.mp4
-*.gcda
-*.gcno
-*.gcov

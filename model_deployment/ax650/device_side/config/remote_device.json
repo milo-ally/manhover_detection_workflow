@@ -1,0 +1,10 @@
+{
+  "remote_device": [
+    {
+      "alias": "MyCamera",
+      "main": {
+        "rtsp": "rtsp://172.19.31.10/lygstream1"
+      }
+    }
+  ]
+}
