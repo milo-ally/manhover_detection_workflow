@@ -18,9 +18,40 @@ ls -lh \
 
 ## 2. 编译
 
+板端先安装编译依赖：
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake pkg-config libopencv-dev
+pkg-config --modversion opencv4
+```
+
+如果 `libopencv-dev` 因板端 `rkmpp` FFmpeg 版本冲突无法安装，运行本目录的安装脚本。脚本只下载并解包开发文件，不会替换系统运行库：
+
+```bash
+chmod +x install_opencv.sh
+./install_opencv.sh
+```
+
+使用脚本输出的实际目录配置 `OpenCV_DIR`，例如：
+
+```bash
+cmake -S . -B build \
+  -DOpenCV_DIR="$HOME/opt/opencv-dev/usr/lib/aarch64-linux-gnu/cmake/opencv4"
+```
+
+该方法只解包 headers 和 CMake 配置，不会替换板端已有的 `rkmpp` FFmpeg 运行库。
+
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
+```
+
+工程优先查找 `OpenCVConfig.cmake`，找不到时会自动回退到 `pkg-config`。如果 OpenCV 是自定义安装，使用：
+
+```bash
+cmake -S . -B build \
+  -DOpenCV_DIR=/path/to/opencv/lib/cmake/opencv4
 ```
 
 检查 Runtime 动态库架构：
