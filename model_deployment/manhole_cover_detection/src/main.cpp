@@ -143,6 +143,7 @@ int main(int argc, char** argv) {
     cv::Mat bgr;
     std::vector<unsigned char> nv12;
     const AX_U32 frameSize = static_cast<AX_U32>(width * height * 3 / 2);
+    unsigned long long frameCount = 0;
 
     AX_S32 ret = AX_SYS_Init();
     if (ret != 0) {
@@ -200,6 +201,7 @@ int main(int argc, char** argv) {
     }
 
     while (reader.read(bgr)) {
+        ++frameCount;
         if (!bgrToNv12(bgr, nv12) || nv12.size() != frameSize) {
             error = "BGR to NV12 conversion failed";
             goto cleanup;
@@ -241,6 +243,11 @@ cleanup:
     if (sysReady) AX_SYS_Deinit();
     writer.release();
     reader.release();
-    if (status != 0) std::fprintf(stderr, "%s\n", error.c_str());
+    if (status != 0) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+    } else {
+        std::fprintf(stdout, "[INFO] output video: %s, frames: %llu\n",
+                     outputPath.c_str(), frameCount);
+    }
     return status;
 }

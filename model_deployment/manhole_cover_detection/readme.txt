@@ -64,6 +64,14 @@ SDK 头文件已经复制到 msp_sdk/include。AX650N 动态库通常位于板�
     --output /tmp/output_boxed.mp4 \
     --model /tmp/manhole-cover-yolo11s-production.axmodel
 
+检测到目标时，插件只输出一行摘要：
+
+  [ManholeCover] detections=2 confidence: 0.923 0.681
+
+处理完成时，主程序输出保存位置：
+
+  [INFO] output video: /tmp/output_boxed.mp4, frames: 300
+
 也支持原来的位置参数：
 
   debug_demo 输入视频 输出视频 AXModel 文件

@@ -118,26 +118,11 @@ public:
     }
 
     int Inference(const AX_VIDEO_FRAME_T* pFrame, AI_RESULT_T* pResult) override {
-        fprintf(stderr, "/// ============================ DEBUG ================================\n");
-        fprintf(stderr, "[ManholeCover] Inference ENTER: handle=%p frame=%p result=%p\n",
-                static_cast<void*>(m_handle), static_cast<const void*>(pFrame),
-                static_cast<void*>(pResult));
-        fflush(stderr);
-
         if (!m_handle || !pFrame || !pResult) {
-            fprintf(stderr, "[ManholeCover] Inference ABORT: invalid handle/frame/result\n");
-            fprintf(stderr, "/// ============================ DEBUG ================================\n");
-            fflush(stderr);
+            fprintf(stderr, "[ManholeCover][Error] invalid inference arguments\n");
             return -1;
         }
         memset(pResult, 0, sizeof(AI_RESULT_T));
-
-        fprintf(stderr, "[ManholeCover] input frame: width=%u height=%u stride=%u size=%u\n",
-                static_cast<unsigned int>(pFrame->u32Width),
-                static_cast<unsigned int>(pFrame->u32Height),
-                static_cast<unsigned int>(pFrame->u32PicStride[0]),
-                static_cast<unsigned int>(pFrame->u32FrameSize));
-        fflush(stderr);
 
         // Board-side AI frames enter plugins as NV12; conversion and letterbox must
         // match model_convert/pulsar2_sim and model_val exactly.
@@ -158,8 +143,6 @@ public:
         int ret = AX_ENGINE_RunSync(m_handle, &m_io_data);
         if (ret != 0) {
             fprintf(stderr, "[ManholeCover][Error] AX_ENGINE_RunSync failed: 0x%x\n", ret);
-            fprintf(stderr, "/// ============================ DEBUG ================================\n");
-            fflush(stderr);
             return -1;
         }
 
@@ -191,17 +174,14 @@ public:
             snprintf(out.label, sizeof(out.label), "%s", CLASS_NAMES[obj.label]);
         }
 
-        fprintf(stderr, "[ManholeCover] AI_RESULT_T: nObjSize=%u\n",
-                static_cast<unsigned int>(pResult->nObjSize));
-        for (AX_U32 i = 0; i < pResult->nObjSize; ++i) {
-            const AI_OBJ_T& obj = pResult->objects[i];
-            fprintf(stderr, "[ManholeCover] object[%u]: class_id=%d label=%s score=%.6f "
-                    "x=%.6f y=%.6f w=%.6f h=%.6f\n",
-                    static_cast<unsigned int>(i), static_cast<int>(obj.class_id),
-                    obj.label, obj.score, obj.x, obj.y, obj.w, obj.h);
+        if (pResult->nObjSize > 0) {
+            fprintf(stderr, "[ManholeCover] detections=%u confidence:",
+                    static_cast<unsigned int>(pResult->nObjSize));
+            for (AX_U32 i = 0; i < pResult->nObjSize; ++i) {
+                fprintf(stderr, " %.3f", pResult->objects[i].score);
+            }
+            fprintf(stderr, "\n");
         }
-        fprintf(stderr, "/// ============================ DEBUG ================================\n");
-        fflush(stderr);
 
         return 0;
     }
