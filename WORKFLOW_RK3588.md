@@ -1,6 +1,6 @@
 # RK3588 完整工作流
 
-本文档是 RK3588 的独立复现入口，覆盖 ONNX 准备、RKNN INT8 转换、验证和 C/C++ 离线视频部署。
+本文档是 RK3588 的独立复现入口，覆盖 ONNX 准备、RKNN 转换、验证和 C/C++ 离线视频部署。
 
 ## 0. 固定约定
 
@@ -108,7 +108,7 @@ model_convert/rk3588/dataset/calib_images/
   --onnx models/manhole-cover-yolo11s-production.onnx \
   --dataset dataset/calibration.txt \
   --output output/manhole-cover-yolo11s-production.rknn \
-  --dtype i8
+  --dtype fp
 ```
 
 校准列表应包含 72 张本地图片，ONNX 检查应显示：
@@ -132,7 +132,7 @@ cp output/manhole-cover-yolo11s-production.rknn \
   ../../model_val/rk3588/models/
 ```
 
-Toolkit2 会提示输入和输出默认量化为 INT8。C/C++ 程序必须查询 tensor 属性，并通过 `want_float=1` 或量化参数正确处理输出。
+部署使用 FP RKNN，避免坐标和类别分数共用 INT8 输出量化范围。C/C++ 程序仍必须查询 tensor 属性，并通过 `want_float=1` 获取浮点输出。
 
 ## 3. RKNN 精度验证
 
@@ -212,10 +212,12 @@ Runtime 应为 ARM aarch64。若使用交叉编译器，可通过 CMake toolchai
 
 ```bash
 ./bin/debug_demo \
-  models/manhole-cover-yolo11s-production.rknn \
-  input.mp4 \
-  output_manhole.mp4 \
-  0.25 0.45 100
+  --model models/manhole-cover-yolo11s-production.rknn \
+  --input input.mp4 \
+  --output output_manhole.mp4 \
+  --conf-thres 0.25 \
+  --iou-thres 0.45 \
+  --max-det 100
 ```
 
 参数依次为模型、输入视频、输出视频、置信度阈值、NMS IoU 阈值和最大检测数。程序逐帧读取视频、RGB letterbox、RKNN 推理、解码/NMS、绘制检测框并保存输出视频。

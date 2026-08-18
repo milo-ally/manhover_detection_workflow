@@ -1,4 +1,8 @@
-# 主码流
+# AX650 基础推流 FLOW1
+
+本文档是 AX650 的基础 RTSP 输入/输出链路。AX650 侧的实际井盖 AI 流程序
+请使用同目录 `manhole_cover_detection` 小工程和 `FLOW2.md`；本文件中的
+Python 代码只用于验证主机输入流和最小推流链路。
 
 环境前提: 
 
@@ -132,7 +136,8 @@ height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 ffmpeg = subprocess.Popen([
     "ffmpeg", "-f", "rawvideo", "-pix_fmt", "bgr24",
     "-s", f"{width}x{height}", "-r", "25", "-i", "-",
-    "-an", "-c:v", "h264_rkmpp", "-f", "rtsp",
+    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+    "-tune", "zerolatency", "-f", "rtsp",
     "-rtsp_transport", "tcp", OUTPUT_URL,
 ], stdin=subprocess.PIPE)
 

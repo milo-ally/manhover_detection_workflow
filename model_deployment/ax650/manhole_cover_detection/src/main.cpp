@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <cmath>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -54,19 +56,39 @@ static void drawResult(cv::Mat& frame, const AI_RESULT_T& result) {
     }
 }
 
+static bool isRtspUrl(const std::string& value) {
+    return value.rfind("rtsp://", 0) == 0 || value.rfind("rtsps://", 0) == 0;
+}
+
+static std::string shellQuote(const std::string& value) {
+    std::string quoted = "'";
+    for (char character : value) {
+        if (character == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += character;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
+
 static void printUsage(const char* program) {
     std::fprintf(stderr,
-                 "usage: %s --input input.mp4 --output output.mp4 --model model.axmodel "
-                 "[--plugin libmanhole_plugin.so]\n",
+                 "usage: %s --input input.mp4|input.rtsp --output output.mp4|output.rtsp "
+                 "--model model.axmodel [--plugin libmanhole_plugin.so] "
+                 "[--conf-thres 0.25] [--iou-thres 0.45] [--encoder libx264]\n",
                  program);
-    std::fprintf(stderr, "       %s input.mp4 output.mp4 model.axmodel\n", program);
 }
 
 static bool parseArgs(int argc, char** argv, std::string& inputPath,
                       std::string& outputPath, std::string& modelPath,
-                      std::string& pluginPath) {
-    std::vector<std::string> positional;
+                      std::string& pluginPath, float& confThreshold,
+                      float& iouThreshold, std::string& encoder) {
     pluginPath = "./libmanhole_plugin.so";
+    confThreshold = 0.25f;
+    iouThreshold = 0.45f;
+    encoder = "libx264";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -84,18 +106,35 @@ static bool parseArgs(int argc, char** argv, std::string& inputPath,
         } else if (arg == "--plugin") {
             if (++i >= argc) return false;
             pluginPath = argv[i];
+        } else if (arg == "--conf-thres") {
+            if (++i >= argc) return false;
+            try {
+                confThreshold = std::stof(argv[i]);
+            } catch (...) {
+                return false;
+            }
+        } else if (arg == "--iou-thres") {
+            if (++i >= argc) return false;
+            try {
+                iouThreshold = std::stof(argv[i]);
+            } catch (...) {
+                return false;
+            }
+        } else if (arg == "--encoder") {
+            if (++i >= argc) return false;
+            encoder = argv[i];
         } else if (!arg.empty() && arg[0] == '-') {
             std::fprintf(stderr, "unknown option: %s\n", arg.c_str());
             return false;
         } else {
-            positional.push_back(arg);
+            std::fprintf(stderr, "positional arguments are not supported: %s\n", arg.c_str());
+            return false;
         }
     }
 
-    if (inputPath.empty() && positional.size() == 3) inputPath = positional[0];
-    if (outputPath.empty() && positional.size() == 3) outputPath = positional[1];
-    if (modelPath.empty() && positional.size() == 3) modelPath = positional[2];
-    return !inputPath.empty() && !outputPath.empty() && !modelPath.empty();
+    return !inputPath.empty() && !outputPath.empty() && !modelPath.empty() &&
+           std::isfinite(confThreshold) && std::isfinite(iouThreshold) &&
+           confThreshold >= 0.0f && iouThreshold >= 0.0f && !encoder.empty();
 }
 
 int main(int argc, char** argv) {
@@ -103,10 +142,19 @@ int main(int argc, char** argv) {
     std::string outputPath;
     std::string modelPath;
     std::string pluginPath;
-    if (!parseArgs(argc, argv, inputPath, outputPath, modelPath, pluginPath)) {
+    float confThreshold = 0.25f;
+    float iouThreshold = 0.45f;
+    std::string encoder;
+    if (!parseArgs(argc, argv, inputPath, outputPath, modelPath, pluginPath,
+                   confThreshold, iouThreshold, encoder)) {
         printUsage(argv[0]);
         return 1;
     }
+
+    const std::string confValue = std::to_string(confThreshold);
+    const std::string iouValue = std::to_string(iouThreshold);
+    setenv("MANHOLE_CONF_THRESH", confValue.c_str(), 1);
+    setenv("MANHOLE_NMS_THRESH", iouValue.c_str(), 1);
 
     cv::VideoCapture reader(inputPath);
     if (!reader.isOpened()) {
@@ -123,11 +171,32 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    cv::VideoWriter writer(outputPath, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                           fps, cv::Size(width, height));
-    if (!writer.isOpened()) {
-        std::fprintf(stderr, "failed to open output video: %s\n", outputPath.c_str());
-        return 1;
+    cv::VideoWriter writer;
+    FILE* streamPipe = nullptr;
+    if (isRtspUrl(outputPath)) {
+        std::ostringstream command;
+        command << "ffmpeg -loglevel warning -f rawvideo -pix_fmt bgr24"
+                << " -s " << width << "x" << height
+                << " -r " << fps << " -i pipe:0 -an"
+                << " -c:v " << shellQuote(encoder)
+                << " -preset ultrafast -tune zerolatency"
+                << " -pix_fmt yuv420p -f rtsp -rtsp_transport tcp "
+                << shellQuote(outputPath);
+        std::fprintf(stdout, "[INFO] output_mode=rtsp encoder=%s\n", encoder.c_str());
+        std::fprintf(stdout, "[INFO] ffmpeg command: %s\n", command.str().c_str());
+        streamPipe = popen(command.str().c_str(), "w");
+        if (!streamPipe) {
+            std::fprintf(stderr, "failed to start FFmpeg RTSP output: %s\n", outputPath.c_str());
+            return 1;
+        }
+    } else {
+        writer.open(outputPath, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
+                    fps, cv::Size(width, height));
+        if (!writer.isOpened()) {
+            std::fprintf(stderr, "failed to open output video: %s\n", outputPath.c_str());
+            return 1;
+        }
+        std::fprintf(stdout, "[INFO] output_mode=file\n");
     }
 
     void* plugin = nullptr;
@@ -227,7 +296,19 @@ int main(int argc, char** argv) {
             goto cleanup;
         }
         drawResult(bgr, result);
-        writer.write(bgr);
+        if (streamPipe) {
+            if (!bgr.isContinuous()) bgr = bgr.clone();
+            const size_t bytes = bgr.total() * bgr.elemSize();
+            if (std::fwrite(bgr.data, 1, bytes, streamPipe) != bytes) {
+                error = "FFmpeg RTSP output pipe closed";
+                goto cleanup;
+            }
+            std::fflush(streamPipe);
+        } else {
+            writer.write(bgr);
+        }
+        std::fprintf(stdout, "[INFO] frame=%llu detections=%u\n",
+                     frameCount, static_cast<unsigned int>(result.nObjSize));
     }
 
     status = 0;
@@ -241,7 +322,12 @@ cleanup:
     if (plugin) dlclose(plugin);
     if (engineReady) AX_ENGINE_Deinit();
     if (sysReady) AX_SYS_Deinit();
-    writer.release();
+    if (streamPipe) {
+        pclose(streamPipe);
+        streamPipe = nullptr;
+    } else {
+        writer.release();
+    }
     reader.release();
     if (status != 0) {
         std::fprintf(stderr, "%s\n", error.c_str());

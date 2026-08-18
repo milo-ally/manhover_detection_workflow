@@ -77,13 +77,15 @@ cmake -S . -B build -DOpenCV_DIR=/path/to/opencv/lib/cmake/opencv4
 
 ```bash
 ./bin/debug_demo \
-  models/manhole-cover-yolo11s-production.rknn \
-  input.mp4 \
-  output_manhole.mp4 \
-  0.25 0.45 100
+  --model models/manhole-cover-yolo11s-production.rknn \
+  --input input.mp4 \
+  --output output_manhole.mp4 \
+  --conf-thres 0.25 \
+  --iou-thres 0.45 \
+  --max-det 100
 ```
 
-参数依次为：模型、输入视频、输出视频、置信度阈值、NMS IoU 阈值、最大检测数。程序会逐帧输出检测数量和推理耗时，结束后保存完整结果视频。
+参数依次为：模型、输入视频、输出视频、置信度阈值、NMS IoU 阈值、最大检测数。程序会每帧输出检测数量和推理耗时，结束后保存完整结果视频。
 
 如果板端 OpenCV 没有 MP4 编码器，先使用系统支持的输入格式，或在 `src/main.cpp` 将 `mp4v` 替换为板端可用的编码器并使用对应扩展名。
 
@@ -91,6 +93,7 @@ cmake -S . -B build -DOpenCV_DIR=/path/to/opencv/lib/cmake/opencv4
 
 - 程序启动时查询 RKNN 输入输出属性，兼容 NCHW/NHWC 输入。
 - 输入使用 RGB `uint8`，与当前转换配置的 `/255` 预处理对应。
-- 输出通过 `want_float = 1` 请求 Runtime 反量化为 FP32，后处理不直接假设 INT8 数值。
+- 部署模型使用 FP RKNN；输出通过 `want_float = 1` 请求 Runtime 返回 FP32。
+- 不要直接使用当前 INT8 产物：该检测头的坐标和类别分数共用输出量化范围，可能导致类别分数全部为 0。
 - `src/main.cpp` 中的 `draw_detections` 是后续接入插件、告警或推流前的处理位置；当前先把结果写入输出视频。
 - RKNN Runtime 必须与板端架构匹配。本目录提供的是 `aarch64` 的 `librknnrt.so`。
