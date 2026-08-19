@@ -63,7 +63,10 @@ static uint8_t *preload(const char *path, ssize_t *data_size)
 static int read_callback(int64_t offset, void *buffer, size_t size, void *token)
 {
     INPUT_BUFFER *buf = (INPUT_BUFFER *)token;
-    size_t to_copy = MINIMP4_MIN(size, buf->size - offset - size);
+    if (!buf || !buffer || offset < 0 || static_cast<uint64_t>(offset) >= static_cast<uint64_t>(buf->size))
+        return 1;
+    const size_t available = static_cast<size_t>(buf->size - offset);
+    const size_t to_copy = MINIMP4_MIN(size, available);
     memcpy(buffer, buf->buffer + offset, to_copy);
     return to_copy != size;
 }
@@ -87,6 +90,11 @@ void pth_demux(Mp4DemuxerHandle *handle)
 #else
     printf("Read whole video(%s) file to memory.\n", handle->path.c_str());
     handle->buf_h264.reset(preload(handle->path.c_str(), &handle->h264_size), std::default_delete<uint8_t[]>());
+    if (!handle->buf_h264 || handle->h264_size <= 0)
+    {
+        printf("Read video(%s) file failed or empty.\n", handle->path.c_str());
+        return;
+    }
     INPUT_BUFFER buf = {handle->buf_h264.get(), handle->h264_size};
     int file_size = handle->h264_size;
     uint8_t *file_addr = handle->buf_h264.get();
@@ -98,7 +106,12 @@ void pth_demux(Mp4DemuxerHandle *handle)
         int spspps_bytes;
         const void *spspps;
         MP4D_demux_t mp4 = {0};
-        MP4D_open(&mp4, read_callback, &buf, file_size);
+        if (MP4D_open(&mp4, read_callback, &buf, file_size) == 0 || mp4.track_count == 0 || !mp4.track)
+        {
+            printf("Open MP4(%s) failed or contains no tracks.\n", handle->path.c_str());
+            MP4D_close(&mp4);
+            return;
+        }
 
         MP4D_track_t *tr = mp4.track + ntrack;
         unsigned sum_duration = 0;
@@ -195,9 +208,11 @@ mp4_handle_t mp4_open(const char *path, mp4_frame_callback cb, int loopPlay, voi
     Mp4DemuxerHandle *handle = new Mp4DemuxerHandle;
     handle->path = path;
     handle->cb = cb;
-    handle->th_demux = std::thread(pth_demux, handle);
     handle->reserve = reserve;
     handle->loopPlay = loopPlay;
+    // Initialize all fields before starting the worker. Otherwise the worker
+    // can call the callback with an uninitialized reserve pointer.
+    handle->th_demux = std::thread(pth_demux, handle);
     return handle;
 }
 

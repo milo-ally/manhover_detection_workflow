@@ -78,7 +78,7 @@ bool AIProcessor::loadModel(const std::string& modelPath, const std::string& mod
         ALOGN("[AIProcessor] Using behavior detection plugin for model: %s", modelPath.c_str());
     } else {
         pluginPath = "./libhelmet_plugin.so";
-        ALOGN("[AIProcessor] Using default helmet plugin for model: %s", modelPath.c_str());
+        ALOGN("[AIProcessor] Using manhole-cover plugin for model: %s", modelPath.c_str());
     }
 
     // 檢查模型文件是否存在（人員聚集插件會自行 fallback 到人員偵測模型，故跳過檢查）
