@@ -193,8 +193,8 @@ bool RkEncoder::init(int width, int height, int stride, int fps, int bitrateKbps
     }
     mpp_enc_cfg_set_s32(cfg, "prep:width", width);
     mpp_enc_cfg_set_s32(cfg, "prep:height", height);
-    mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", stride);
-    mpp_enc_cfg_set_s32(cfg, "prep:ver_stride", stride);
+    mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", stride);   // 行宽（像素）
+    mpp_enc_cfg_set_s32(cfg, "prep:ver_stride", height);   // 行数（高度），不是 stride！
     mpp_enc_cfg_set_s32(cfg, "prep:format", MPP_FMT_YUV420SP);
     mpp_enc_cfg_set_s32(cfg, "rc:mode", MPP_ENC_RC_MODE_CBR);
     const int bps = bitrateKbps * 1000;
@@ -244,8 +244,8 @@ bool RkEncoder::encodeFrame(const RkNv12Frame& frame) {
     mpp_frame_init(&mf);
     mpp_frame_set_width(mf, frame.width);
     mpp_frame_set_height(mf, frame.height);
-    mpp_frame_set_hor_stride(mf, frame.stride);
-    mpp_frame_set_ver_stride(mf, frame.stride);
+    mpp_frame_set_hor_stride(mf, frame.stride);   // 行宽（像素）
+    mpp_frame_set_ver_stride(mf, frame.height);   // 行数（高度）
     mpp_frame_set_fmt(mf, MPP_FMT_YUV420SP);
 
     MppBuffer buf = nullptr;
