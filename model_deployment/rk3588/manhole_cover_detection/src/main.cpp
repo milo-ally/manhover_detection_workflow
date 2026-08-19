@@ -188,11 +188,12 @@ int main(int argc, char* argv[]) {
         for (auto& stream : streamManager.getStreams()) {
             if (!stream->isMainStream() || !stream->isFileOutput()) continue;
             const std::string raw = stream->getOutputFilePath();
-            if (raw.size() <= 8 ||
-                raw.compare(raw.size() - 8, 8, ".tmp.h264") != 0) {
+            // ".tmp.h264" 是 9 个字符（'.'+'tmp.h264'），偏移与长度都用 9
+            if (raw.size() <= 9 ||
+                raw.compare(raw.size() - 9, 9, ".tmp.h264") != 0) {
                 continue;  // 非 .mp4 目标：raw 即最终产物
             }
-            const std::string target = raw.substr(0, raw.size() - 8);
+            const std::string target = raw.substr(0, raw.size() - 9);
             const std::string command =
                 "ffmpeg -y -f h264 -framerate " + std::to_string(stream->getFps()) +
                 " -i " + shell_quote(raw) + " -c copy " + shell_quote(target);
