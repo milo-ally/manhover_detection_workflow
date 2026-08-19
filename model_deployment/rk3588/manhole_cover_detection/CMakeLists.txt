@@ -95,31 +95,53 @@ message(STATUS "OpenCV include: ${OPENCV_INCLUDE_DIR}")
 message(STATUS "OpenCV libraries: ${OpenCV_LIBS}")
 
 # ===== FFmpeg（档位2：H264Demux 解封装，libavformat）=====
-find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h
-    PATHS /usr/include /usr/include/aarch64-linux-gnu
-)
-# 优先链接共享运行库（带版本号的 .so.XX，板端 ffmpeg 运行时自带），
-# 避免只有静态 .a 时拖入 bz2/lzma 等传递依赖；找不到再退回 unversioned/.a。
-find_library(AVFORMAT_LIB
-    NAMES libavformat.so.61 libavformat.so.60 libavformat.so.59 libavformat.so.58 libavformat
-    PATHS /usr/lib/aarch64-linux-gnu /usr/lib
-)
-find_library(AVCODEC_LIB
-    NAMES libavcodec.so.61 libavcodec.so.60 libavcodec.so.59 libavcodec.so.58 libavcodec
-    PATHS /usr/lib/aarch64-linux-gnu /usr/lib
-)
-find_library(AVUTIL_LIB
-    NAMES libavutil.so.59 libavutil.so.58 libavutil.so.57 libavutil.so.56 libavutil
-    PATHS /usr/lib/aarch64-linux-gnu /usr/lib
-)
-if(NOT AVFORMAT_INCLUDE_DIR OR NOT AVFORMAT_LIB OR NOT AVCODEC_LIB OR NOT AVUTIL_LIB)
-    message(FATAL_ERROR "FFmpeg libavformat/libavcodec/libavutil not found (needed by H264Demux).")
+# 优先用 pkg-config（板端 Rockchip multimedia FFmpeg 通常带 .pc，能给出完整链接
+# 参数，避免静态 .a 逐个缺符号：swresample/drm/zlib/bz2/lzma...）
+find_package(PkgConfig)
+set(AV_LIBS "")
+set(AVFORMAT_INCLUDE_DIR "")
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(AVFORMAT_PC QUIET libavformat libavcodec libavutil)
+    if(AVFORMAT_PC_FOUND)
+        # LIBRARIES 为共享链接参数；LIBRARIES_PRIVATE 为静态 .pc 的传递依赖（swresample/drm 等）
+        set(AV_LIBS ${AVFORMAT_PC_LIBRARIES} ${AVFORMAT_PC_LIBRARIES_PRIVATE})
+        set(AVFORMAT_INCLUDE_DIR "${AVFORMAT_PC_INCLUDE_DIRS}")
+        message(STATUS "FFmpeg via pkg-config: ${AV_LIBS}")
+    endif()
 endif()
-# 若上面只找到静态 .a（如 /usr/lib/libavformat.a），需补传递依赖 zlib/bz2/lzma，
-# 否则报 "libavformat.a: undefined reference to 'inflateEnd'" / "cannot find -lbz2" 等。
-# 板端可先装：sudo apt install libbz2-dev liblzma-dev
-set(AV_LIBS ${AVFORMAT_LIB} ${AVCODEC_LIB} ${AVUTIL_LIB} z bz2 lzma)
-message(STATUS "FFmpeg libs: ${AV_LIBS}")
+
+if(NOT AV_LIBS)
+    find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h
+        PATHS /usr/include /usr/include/aarch64-linux-gnu
+    )
+    # 优先共享运行库（带版本号 .so.XX），避免静态 .a 的传递依赖链
+    find_library(AVFORMAT_LIB
+        NAMES libavformat.so.61 libavformat.so.60 libavformat.so.59 libavformat.so.58 libavformat
+        PATHS /usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib
+    )
+    find_library(AVCODEC_LIB
+        NAMES libavcodec.so.61 libavcodec.so.60 libavcodec.so.59 libavcodec.so.58 libavcodec
+        PATHS /usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib
+    )
+    find_library(AVUTIL_LIB
+        NAMES libavutil.so.59 libavutil.so.58 libavutil.so.57 libavutil.so.56 libavutil
+        PATHS /usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib
+    )
+    if(AVFORMAT_LIB AND AVCODEC_LIB AND AVUTIL_LIB)
+        # 静态 .a 回退：补 FFmpeg 传递依赖（zlib/bz2/lzma/swresample/drm），
+        # 否则报 undefined reference to 'inflateEnd'/'swr_*'/'drmGetVersion' 等
+        set(AV_LIBS ${AVFORMAT_LIB} ${AVCODEC_LIB} ${AVUTIL_LIB}
+            swresample z bz2 lzma drm m pthread dl)
+        message(STATUS "FFmpeg manual: ${AV_LIBS}")
+    endif()
+endif()
+
+if(NOT AV_LIBS OR NOT AVFORMAT_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "FFmpeg libavformat/libavcodec/libavutil not found. Install dev packages "
+        "(libavformat-dev/libavcodec-dev/libavutil-dev) or use the board's Rockchip "
+        "multimedia FFmpeg shared libs.")
+endif()
 
 # ===== 井盖检测插件（主程序 dlopen 加载，内部使用 RKNPU2）=====
 add_library(manhole_plugin SHARED plugins/model_manhole_cover.cpp)
