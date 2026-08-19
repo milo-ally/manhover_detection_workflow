@@ -111,7 +111,12 @@ void VideoStream::onDecodedFrame(const RkNv12Frame& frame) {
             return;
         }
         std::vector<uint8_t> hdr;
-        if (encoder_->getHeader(hdr) && !hdr.empty()) pushToOutput(hdr.data(), hdr.size());
+        if (encoder_->getHeader(hdr) && !hdr.empty()) {
+            // 把 SPS/PPS 单独写一次到流最前（若为空则跳过，依赖 EACH_IDR 帧内联）
+            pushToOutput(hdr.data(), hdr.size());
+            ALOGN("[VideoStream] Stream %d: wrote encoder header %zu bytes",
+                  config_.streamId, hdr.size());
+        }
         encoderReady_ = true;
     }
 
@@ -190,6 +195,15 @@ void VideoStream::openOutput() {
 }
 
 void VideoStream::pushToOutput(const uint8_t* data, size_t size) {
+    // 诊断：打印前 4 个包的 size 和前 4 字节（应为 00 00 00 01 起始码）
+    static int pktLog = 0;
+    if (pktLog < 4 && data && size > 0) {
+        const unsigned char* d = reinterpret_cast<const unsigned char*>(data);
+        ALOGN("[VideoStream] Stream %d: out pkt[%d] size=%zu head=%02x %02x %02x %02x",
+              config_.streamId, pktLog++, size,
+              size > 0 ? d[0] : 0, size > 1 ? d[1] : 0,
+              size > 2 ? d[2] : 0, size > 3 ? d[3] : 0);
+    }
     if (fileOut_) {
         fwrite(data, 1, size, fileOut_);
         return;
