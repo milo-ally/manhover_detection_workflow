@@ -199,15 +199,15 @@ model_deployment/rk3588/manhole_cover_detection/
 │   └── manager/*.cpp
 ├── utilities/                         # json.hpp / sample_log.h
 ├── models/manhole-cover-yolo11s-production.rknn
-└── rknpu2/                    # 不随仓库提交（.gitignore 忽略），编译前需要放回
+└── rknpu2/                    # RKNN 运行时（随仓库提交：rknn_api.h + aarch64 librknnrt.so）
     ├── include/rknn_api.h
     └── lib/librknnrt.so
 ```
 
-`rknpu2/` 被 `.gitignore` 忽略，不会出现在克隆的仓库里；`CMakeLists.txt` 默认从
-`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先从
-Rockchip 官方 `rknn_model_zoo` 的 `3rdparty/rknpu2` 把对应 RK3588/aarch64 的 Runtime
-放回本目录（版本提交见 `model_deployment/rk3588/manhole_cover_detection/SOP.md`）。
+`rknpu2/` 已随仓库提交，`CMakeLists.txt` 默认从 `rknpu2/include` 和 `rknpu2/lib` 查找
+`rknn_api.h` 与 `librknnrt.so`，克隆后可直接编译。如需核对/重新获取（Rockchip 官方
+`rknn_model_zoo` 提交 `bad6c7334531becaf90a561988519b7bec34d0ab`，curl 下载地址见
+`model_deployment/rk3588/manhole_cover_detection/SOP.md` §1 与 `readme.txt`）。
 
 该工程与 AX650 板端工程同构（配置驱动 + dlopen 插件 ABI + 多流管理），推理后端为
 RKNPU2。当前模型是单输出 `[1,9,8400]`，因此插件后处理按当前五分类输出实现，

@@ -52,12 +52,27 @@ model_val/rk3588/runs/*_rknn_predictions.jsonl
 ```
 
 只有验收通过的 `.rknn` 才复制到部署目录 `models/`（模型文件不提交 Git，`*.rknn` 不随
-仓库保存；`rknpu2/` 运行库同样不提交，需按工程内 `SOP.md` 放回）：
+仓库保存）：
 
 ```bash
 mkdir -p model_deployment/rk3588/manhole_cover_detection/models
 cp model_convert/rk3588/output/manhole-cover-yolo11s-production.rknn \
   model_deployment/rk3588/manhole_cover_detection/models/
+```
+
+RKNN 运行时 `rknpu2/`（`include/rknn_api.h` + `lib/librknnrt.so`，aarch64）**已随仓库
+提交**，无需额外准备即可编译。如需核对/重新获取（固定来自 Rockchip `rknn_model_zoo`
+提交 `bad6c7334531becaf90a561988519b7bec34d0ab`，详见工程内 `SOP.md` §1 与
+`readme.txt`），下载地址：
+
+```bash
+# ① rknn_api.h
+curl -L -o rknpu2/include/rknn_api.h \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/include/rknn_api.h"
+# ② librknnrt.so（aarch64）
+curl -L -o rknpu2/lib/librknnrt.so \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/Linux/aarch64/librknnrt.so"
+file rknpu2/lib/librknnrt.so   # 必须显示 ARM aarch64
 ```
 
 ## 2. 板端代码链路
@@ -331,7 +346,8 @@ cmake --install build
 前置条件：
 
 ```text
-rknpu2/include/rknn_api.h 和 rknpu2/lib/librknnrt.so 已放回（不提交 Git）
+rknpu2/include/rknn_api.h 和 rknpu2/lib/librknnrt.so 已随仓库提交（直接可用；
+  如需重新获取见 §1 的下载地址或 SOP.md §1）
 OpenCV core/imgproc/videoio 开发文件（无则运行 install_opencv.sh）
 models/manhole-cover-yolo11s-production.rknn 已放置（模型不提交 Git）
 ```

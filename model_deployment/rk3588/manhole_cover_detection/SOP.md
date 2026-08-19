@@ -11,10 +11,26 @@ ls -lh \
   rknpu2/lib/librknnrt.so
 ```
 
-注意：`rknpu2/` 目录不随仓库提交（已被 `.gitignore` 忽略），`CMakeLists.txt` 默认在
-`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先把
-Runtime 放回本目录。本工程使用的 `rknn_api.h` 和 `librknnrt.so` 来自 Rockchip 官方 `rknn_model_zoo`，版本提交为：
-`bad6c7334531becaf90a561988519b7bec34d0ab`。如果需要重新准备 Runtime，应从官方仓库的 `3rdparty/rknpu2` 取对应 RK3588/aarch64 文件。
+`rknpu2/`（`include/rknn_api.h` + `lib/librknnrt.so`）**已随仓库提交**，`CMakeLists.txt`
+默认在 `rknpu2/include` 和 `rknpu2/lib` 查找这两个文件，克隆后无需额外准备即可编译。
+如需核对或重新获取（本工程使用的版本来自 Rockchip 官方 `rknn_model_zoo`，提交
+`bad6c7334531becaf90a561988519b7bec34d0ab`），可复现流程：
+
+```bash
+cd model_deployment/rk3588/manhole_cover_detection
+mkdir -p rknpu2/include rknpu2/lib
+# ① rknn_api.h（头文件，与架构无关）
+curl -L -o rknpu2/include/rknn_api.h \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/include/rknn_api.h"
+# ② librknnrt.so（aarch64 运行库；仓库内路径 3rdparty/rknpu2/Linux/aarch64/librknnrt.so）
+curl -L -o rknpu2/lib/librknnrt.so \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/Linux/aarch64/librknnrt.so"
+file rknpu2/lib/librknnrt.so   # 必须显示 ARM aarch64
+```
+
+（备选：`git clone https://github.com/airockchip/rknn_model_zoo.git /tmp/rknn_model_zoo`
+后 `git checkout bad6c7334531becaf90a561988519b7bec34d0ab`，再复制
+`3rdparty/rknpu2/include/rknn_api.h` 与 `3rdparty/rknpu2/Linux/aarch64/librknnrt.so`。）
 
 准备一个板端 OpenCV 可以读取的视频，例如 `input.mp4`。
 

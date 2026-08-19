@@ -109,9 +109,25 @@ FFmpeg 二进制。
 file rknpu2/lib/librknnrt.so
 ```
 
-注意：`rknpu2/` 目录不随仓库提交（已被 `.gitignore` 忽略），`CMakeLists.txt` 默认从
-`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先按
-`manhole_cover_detection/SOP.md` 从官方 `rknn_model_zoo` 把 Runtime 放回本目录。
+注意：`rknpu2/`（`include/rknn_api.h` + `lib/librknnrt.so`，aarch64）**已随仓库提交**，
+`CMakeLists.txt` 默认从 `rknpu2/include` 和 `rknpu2/lib` 查找，克隆后可直接编译。
+如需核对/重新获取（Rockchip 官方 `rknn_model_zoo` 提交
+`bad6c7334531becaf90a561988519b7bec34d0ab`，详见 `manhole_cover_detection/SOP.md` §1）：
+
+```bash
+cd manhole_cover_detection
+mkdir -p rknpu2/include rknpu2/lib
+# ① rknn_api.h
+curl -L -o rknpu2/include/rknn_api.h \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/include/rknn_api.h"
+# ② librknnrt.so（aarch64）
+curl -L -o rknpu2/lib/librknnrt.so \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/Linux/aarch64/librknnrt.so"
+file rknpu2/lib/librknnrt.so   # 必须显示 ARM aarch64
+```
+
+缺这两个文件时 `demo` 能编译但 `libmanhole_plugin.so` 编译/链接失败，运行时报
+`dlopen failed`。
 
 RK3588 应显示 `ARM aarch64`。模型和 Runtime 必须匹配板端架构。
 

@@ -44,7 +44,7 @@ model_deployment/rk3588/manhole_cover_detection/
 │   └── manager/*.cpp                  # 与 ax650 src/manager/ 一一对应
 ├── utilities/                         # json.hpp / sample_log.h（平台无关）
 ├── models/manhole-cover-yolo11s-production.rknn
-└── rknpu2/                            # 不随仓库提交（.gitignore 忽略），编译前需要放回
+└── rknpu2/                            # RKNN 运行时（随仓库提交）
     ├── include/rknn_api.h
     └── lib/librknnrt.so
 ```
@@ -58,10 +58,45 @@ independent/params`）、`global_settings`（`mediamtx_host/mediamtx_port/defaul
 enable_raw_stream`））。仅底层硬件实现不同：AX650 走 VDEC/IVPS/VENC 硬件流水线，
 RK3588 用 OpenCV 解码 + FFmpeg h264_rkmpp 输出 + RKNN 推理。
 
-`rknpu2/` 目录被 `.gitignore` 忽略，不会出现在克隆的仓库里；`CMakeLists.txt` 默认从
-`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先从
-Rockchip 官方 `rknn_model_zoo` 的 `3rdparty/rknpu2` 把对应 RK3588/aarch64 的 Runtime
-放回本目录（提交见 `SOP.md`）。
+## RKNN 运行时（rknpu2/）
+
+`rknpu2/`（`include/rknn_api.h` + `lib/librknnrt.so`）**已随仓库提交**，`CMakeLists.txt`
+默认从 `rknpu2/include` 和 `rknpu2/lib` 查找这两个文件，克隆后无需额外准备即可编译。
+若需要核对或重新获取（例如更换运行库版本），可复现流程如下。
+
+**详细下载地址（Rockchip 官方 `rknn_model_zoo`，固定提交 `bad6c7334531becaf90a561988519b7bec34d0ab`）：**
+
+```bash
+cd model_deployment/rk3588/manhole_cover_detection
+mkdir -p rknpu2/include rknpu2/lib
+
+# ① rknn_api.h（头文件，与架构无关）
+curl -L -o rknpu2/include/rknn_api.h \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/include/rknn_api.h"
+
+# ② librknnrt.so（aarch64 运行库，必须与板端架构匹配；仓库内路径：
+#    3rdparty/rknpu2/Linux/aarch64/librknnrt.so）
+curl -L -o rknpu2/lib/librknnrt.so \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/rknpu2/Linux/aarch64/librknnrt.so"
+
+# 校验：必须显示 ARM aarch64
+file rknpu2/lib/librknnrt.so
+ls -lh rknpu2/include/rknn_api.h rknpu2/lib/librknnrt.so
+```
+
+没有 `curl` 时也可以用 git 获取（完整克隆后切到固定提交，再复制两个文件）：
+
+```bash
+git clone https://github.com/airockchip/rknn_model_zoo.git /tmp/rknn_model_zoo
+git -C /tmp/rknn_model_zoo checkout bad6c7334531becaf90a561988519b7bec34d0ab
+cp /tmp/rknn_model_zoo/3rdparty/rknpu2/include/rknn_api.h        rknpu2/include/
+cp /tmp/rknn_model_zoo/3rdparty/rknpu2/Linux/aarch64/librknnrt.so rknpu2/lib/
+```
+
+重新获取/更新运行库后执行 `cmake --build build` 会同时产出 `bin/demo` 和
+`bin/libmanhole_plugin.so`；若只有 `demo`，先执行
+`cmake --build build --target manhole_plugin -j2` 查看该目标的编译/链接报错
+（通常是 `rknpu2/lib/librknnrt.so` 架构不匹配或缺失）。
 
 ## 板端编译
 
@@ -150,4 +185,4 @@ cp config/streams_config.json /dev/shm/ai_config.json
 - 输入使用 RGB `uint8`，与当前转换配置的 `/255` 预处理对应（letterbox padding=114）。
 - 部署模型使用 FP RKNN；输出通过 `want_float = 1` 请求 Runtime 返回 FP32。
 - 不要直接使用当前 INT8 产物：该检测头的坐标和类别分数共用输出量化范围，可能导致类别分数全部为 0。
-- RKNN Runtime 必须与板端架构匹配，使用 `aarch64` 的 `librknnrt.so`；该文件不随仓库提交，需要先放回 `rknpu2/lib/`。
+- RKNN Runtime 必须与板端架构匹配，仓库随附 `aarch64` 的 `librknnrt.so`（`rknpu2/lib/`），重新获取见上文"RKNN 运行时"章节。
