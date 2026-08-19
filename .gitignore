@@ -113,3 +113,5 @@ model_val/rk3588/labels/*
 model_deployment/rk3588/manhole_cover_detection/build/
 model_deployment/rk3588/manhole_cover_detection/bin/
 model_deployment/rk3588/manhole_cover_detection/rknpu2/
+
+device_side/

@@ -1,0 +1,6 @@
+{
+  "model_name": "manhole_cover",
+  "model_path": "/root/kaohe_6076/models/yolo11s-manhole-detection.axmodel",
+  "conf_thres": 0.25,
+  "nms_thres": 0.45
+}

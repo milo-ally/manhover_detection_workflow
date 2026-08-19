@@ -1,0 +1,25 @@
+{
+  "streams": [
+    {
+      "stream_id": 1,
+      "input_source": "../test.mp4",
+      "conf_thres": 0.25,
+      "nms_thres": 0.45,
+      "output_width": 1920,
+      "output_height": 1080,
+      "fps": 30,
+      "enable_ai": true,
+      "ai_output_width": 640,
+      "ai_output_height": 640,
+      "models": [
+        {
+          "name": "manhole_cover",
+          "path": "/root/kaohe_6076/models/yolo11s-manhole-detection.axmodel",
+          "conf_threshold": 0.25,
+          "nms_threshold": 0.45
+        }
+      ]
+    }
+  ]
+}
+
