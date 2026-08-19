@@ -99,11 +99,19 @@ sudo apt install -y ffmpeg cmake build-essential pkg-config
 ffmpeg -encoders | grep -E 'h264_rkmpp|hevc_rkmpp'
 ```
 
-本程序使用 `h264_rkmpp` 输出 H.264 RTSP。如果没有该编码器，需要使用板端
-已有的 Rockchip multimedia FFmpeg，不能直接使用只包含软件编码器的另一个
-FFmpeg 二进制。
+档位2 使用 MPP 硬件解码/编码与 RGA 2D 加速（不再依赖 OpenCV 视频编解码），需要
+MPP/RGA 开发头文件（见 `manhole_cover_detection/SOP.md` §1.1，含官方下载 URL）与
+FFmpeg 开发库（libavformat/libavcodec/libavutil，H264Demux 用）。检查系统库：
 
-检查 RKNPU2 Runtime：
+检查板端系统库与 RKNPU2 Runtime：
+
+```bash
+ls /usr/lib/librockchip_mpp*.so /usr/lib/librga.so   # MPP/RGA 运行库
+```
+
+```bash
+file rknpu2/lib/librknnrt.so
+```
 
 ```bash
 file rknpu2/lib/librknnrt.so
@@ -173,8 +181,15 @@ src/manager/video_stream_manager.cpp
    根据配置创建多路 VideoStream（输入来自配置的 input_source）
 
 src/manager/video_stream.cpp
-   OpenCV VideoCapture 解码 -> 推理（单模型或 InferenceManager 多模型调度）
-   -> OSDRenderer 画框 -> OpenCV MP4（offline）或 FFmpeg h264_rkmpp RTSP（stream）
+   每路输入拆两条流（与 ax650 一致）：
+   主码流：H264Demux -> MPP 解码 -> RGA -> CPU 画框 -> MPP 编码 -> rtp_pusher/文件
+   AI 流：FrameBroker 取帧 -> RGA 640 -> 推理 -> SharedAIResult
+
+common/rk_media.{h,cpp}
+   档位2 硬件层：MPP mpi_dec（对应 VDEC）/ mpp_enc（对应 VENC）/ RGA（对应 IVPS）
+
+common/h264_demux.{h,cpp} / common/common_pipeline/rtp_pusher.{c,h}
+   FFmpeg 解封装（对应 VideoDemux）/ 与 ax650 同源的 RTP 推流
 
 src/manager/ai_processor.cpp
    dlopen 插件（配置 plugin 字段或默认 ./libmanhole_plugin.so），
@@ -231,19 +246,13 @@ RKNN 后处理，而不是只显示在配置中。
 
 ### 5.5 输出分支
 
-offline 模式：OpenCV `VideoWriter`（`mp4v`）保存 MP4，路径由 `-o` 指定。
+offline 模式：`MPP 编码 -> raw H.264 文件 -> ffmpeg 封装 MP4`（路径由 `-o` 指定，
+以 `.mp4` 结尾时先写 `.tmp.h264`，结束后自动封装，与 AX650 一致）。
 
-stream 模式：程序启动 FFmpeg 子进程，把绘制后的 BGR 原始帧写入 stdin：
-
-```text
-ffmpeg -loglevel warning -f rawvideo -pix_fmt bgr24 -s WIDTHxHEIGHT -r FPS -i pipe:0 \
-  -an -c:v h264_rkmpp -pix_fmt yuv420p -f rtsp \
-  -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
-```
-
-这里的 `-s`、`-r` 由输入视频实际属性生成。输出 RTSP 地址默认
-`rtsp://127.0.0.1:8554/ai_out`，多路时自动加流号，也可在配置 `rtsp_output_url`
-覆盖。当前 AI 流默认不转发音频，因为程序只从 OpenCV 读取视频帧。
+stream 模式：`MPP 编码 -> rtp_pusher(RTP/UDP) -> MediaMTX`（与 AX650 完全一致，
+不经 FFmpeg 管道）。MediaMTX 端点默认 `127.0.0.1:8000`，可由 `--mediamtx IP:PORT` /
+配置 `mediamtx_host/mediamtx_port` / 环境变量 `MEDIAMTX_HOST`/`MEDIAMTX_RTP_PORT` 覆盖。
+当前不转发音频。
 
 ### 5.6 推理和绘制顺序
 

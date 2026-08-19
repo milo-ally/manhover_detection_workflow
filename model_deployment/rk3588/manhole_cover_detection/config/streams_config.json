@@ -9,6 +9,7 @@
       "output_width": 1920,
       "output_height": 1080,
       "fps": 30,
+      "bitrate_kbps": 4000,
       "enable_ai": true,
       "ai_output_width": 640,
       "ai_output_height": 640,

@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <set>
@@ -19,6 +20,15 @@ extern "C" volatile int gLoopExit = 0;
 extern "C" void __sigExit(int iSigNo) {
     ALOGN("Catch signal %d, exiting...", iSigNo);
     gLoopExit = 1;
+}
+
+static std::string shell_quote(const std::string& value) {
+    std::string quoted = "'";
+    for (char c : value) {
+        if (c == '\'') quoted += "'\\''";
+        else quoted += c;
+    }
+    return quoted + "'";
 }
 
 static void print_help(const char* program) {
@@ -137,10 +147,10 @@ int main(int argc, char* argv[]) {
     }
     ALOGN("All streams started. Total streams: %zu", streamManager.getStreams().size());
 
-    // 在所有流启动后初始化 OSD 管理（对齐 ax650 调用顺序）
+    // 在所有流启动后初始化 OSD 管理（只对 AI 流；对齐 ax650 调用顺序）
     ALOGN("[Main] Initializing OSD for all AI streams...");
     for (auto& stream : streamManager.getStreams()) {
-        if (stream->isAIEnabled()) {
+        if (stream->isAIStream()) {
             streamManager.initializeOSDForAIStream(stream->getStreamId());
         }
     }
@@ -162,7 +172,7 @@ int main(int argc, char* argv[]) {
     }
 
     ALOGN("System Ready");
-    ALOGN("Input sources: %zu", streamManager.getStreams().size());
+    ALOGN("Input sources: %zu", streamManager.getStreams().size() / 2);
     ALOGN("Config file: /dev/shm/ai_config.json");
 
     while (!gLoopExit && !configService.isShutdownRequested()) {
@@ -171,6 +181,32 @@ int main(int argc, char* argv[]) {
             break;
         }
         sleep(1);
+    }
+
+    // 离线模式：把主码流写出的 raw H.264 封装为 MP4（与 AX650 一致）
+    if (runMode == "offline") {
+        for (auto& stream : streamManager.getStreams()) {
+            if (!stream->isMainStream() || !stream->isFileOutput()) continue;
+            const std::string raw = stream->getOutputFilePath();
+            if (raw.size() <= 8 ||
+                raw.compare(raw.size() - 8, 8, ".tmp.h264") != 0) {
+                continue;  // 非 .mp4 目标：raw 即最终产物
+            }
+            const std::string target = raw.substr(0, raw.size() - 8);
+            const std::string command =
+                "ffmpeg -y -f h264 -framerate " + std::to_string(stream->getFps()) +
+                " -i " + shell_quote(raw) + " -c copy " + shell_quote(target);
+            ALOGN("[Main] Muxing offline H.264 to MP4: %s", target.c_str());
+            const int muxRet = std::system(command.c_str());
+            if (muxRet == 0) {
+                std::remove(raw.c_str());
+                ALOGN("[Main] Offline MP4 generated: %s", target.c_str());
+            } else {
+                ALOGE("[Main] FFmpeg MP4 mux failed (%d); raw H.264 kept at %s",
+                      muxRet, raw.c_str());
+                ret = -1;
+            }
+        }
     }
 
 EXIT:

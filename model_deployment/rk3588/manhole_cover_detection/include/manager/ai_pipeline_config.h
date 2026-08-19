@@ -44,6 +44,7 @@ struct StreamConfig {
     int outputWidth = 1920;
     int outputHeight = 1080;
     int fps = 30;
+    int bitrateKbps = 4000;      // 编码码率（档位2 MPP VENC；可配置 bitrate_kbps）
     int aiOutputWidth = 640;     // ai_output_width（RK3588 插件固定 640）
     int aiOutputHeight = 640;    // ai_output_height
     int aiFps = 15;              // ai_fps

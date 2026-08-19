@@ -32,7 +32,33 @@ file rknpu2/lib/librknnrt.so   # 必须显示 ARM aarch64
 后 `git checkout bad6c7334531becaf90a561988519b7bec34d0ab`，再复制
 `3rdparty/rknpu2/include/rknn_api.h` 与 `3rdparty/rknpu2/Linux/aarch64/librknnrt.so`。）
 
-准备一个板端 OpenCV 可以读取的视频，例如 `input.mp4`。
+### 1.1 MPP / RGA 依赖（档位2，必做）
+
+档位2 使用 Rockchip MPP（硬件解码/编码）与 RGA（2D 缩放/格式转换）。板端镜像一般已带
+运行库（`/usr/lib/librockchip_mpp*.so`、`/usr/lib/librga.so`），开发头文件按任一方式准备：
+
+```bash
+# 方式 A：板端 apt（若镜像源有）
+sudo apt install -y librockchip-mpp-dev librga-dev
+
+# 方式 B：官方 GitHub 固定版本（可复现）
+cd model_deployment/rk3588/manhole_cover_detection
+mkdir -p third-party/mpp third-party/rga
+# ① MPP 头文件：rockchip-linux/mpp tag 1.1.0（提交 c08762ebfadeb4e986d2fed993bc7a54862d3ebe）
+git clone --depth 1 --branch 1.1.0 https://github.com/rockchip-linux/mpp.git /tmp/mpp
+cp /tmp/mpp/inc/*.h third-party/mpp/inc/
+# ② RGA 头文件 + aarch64 库：rknn_model_zoo 提交 bad6c733.../3rdparty/librga
+curl -L -o third-party/rga/include/im2d.h \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/librga/include/im2d.h"
+curl -L -o third-party/rga/lib/librga.so \
+  "https://raw.githubusercontent.com/airockchip/rknn_model_zoo/bad6c7334531becaf90a561988519b7bec34d0ab/3rdparty/librga/Linux/aarch64/librga.so"
+file third-party/rga/lib/librga.so   # 必须显示 ARM aarch64
+```
+
+出处：MPP `https://github.com/rockchip-linux/mpp`（tag 1.1.0）；RGA 在 `rknn_model_zoo`
+提交 `bad6c7334531becaf90a561988519b7bec34d0ab` 的 `3rdparty/librga/`。
+
+准备一个板端 FFmpeg 可解的视频（H.264），例如 `input.mp4`。
 
 ## 2. 编译
 
@@ -40,7 +66,8 @@ file rknpu2/lib/librknnrt.so   # 必须显示 ARM aarch64
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake pkg-config libopencv-dev
+sudo apt install -y build-essential cmake pkg-config ffmpeg \
+  libavformat-dev libavcodec-dev libavutil-dev libopencv-dev
 pkg-config --modversion opencv4
 ```
 
@@ -66,20 +93,23 @@ cmake --build build -j2
 cmake --install build
 ```
 
-工程只查找实际使用的 OpenCV `core`、`imgproc` 和 `videoio` 模块，不要求完整的 OpenCV 模块集合。如果 OpenCV 是自定义安装，使用：
+工程只查找实际使用的 OpenCV `core`、`imgproc` 模块（档位2 画框用），不要求完整 OpenCV
+模块集合。MPP/RGA 头文件查找顺序为系统路径 → `third-party/mpp`、`third-party/rga`
+（见 §1.1）。如果 OpenCV 是自定义安装，使用：
 
 ```bash
 cmake -S . -B build \
   -DOpenCV_DIR=/path/to/opencv/lib/cmake/opencv4
 ```
 
-检查 Runtime 动态库架构：
+检查依赖动态库架构（档位2 走 MPP/RGA，不依赖 OpenCV 视频编解码）：
 
 ```bash
 file rknpu2/lib/librknnrt.so
+file third-party/rga/lib/librga.so   # 若用方式 B
 ```
 
-输出应为 ARM aarch64。若系统 OpenCV 缺少视频编解码支持，CMake 可能成功但 `VideoCapture` 或 `VideoWriter` 会打开失败，需要更换板端 OpenCV 或编码器。
+输出应为 ARM aarch64。
 
 产物：
 
@@ -107,7 +137,8 @@ conf_threshold = 0.25
 iou_threshold  = 0.45
 ```
 
-输出视频包含检测框、类别名和置信度（OpenCV `mp4v` 编码）。推理过程中的实时日志包含
+流程：`H264Demux -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
+（raw H.264）-> ffmpeg 封装 MP4`（与 AX650 离线链路一致）。推理过程中的实时日志包含
 `[ManholeCover]` 检测数量和置信度。
 
 ### 3.2 SSH 隧道 RTSP 流
@@ -121,9 +152,10 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ./demo -c ../config/streams_config.json -m stream
 ```
 
-输出使用板端 `h264_rkmpp` 编码器发布到 `rtsp://127.0.0.1:8554/ai_out`
-（可在配置 `rtsp_output_url` 覆盖）；主机通过 SSH `-L` 映射后的
-`rtsp://127.0.0.1:8557/ai_out` 查看。
+流程：`H264Demux(RTSP) -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
+-> rtp_pusher(RTP/UDP) -> MediaMTX`（与 AX650 一致）。MediaMTX 端点默认
+`127.0.0.1:8000`（`--mediamtx` / 配置 `mediamtx_host/mediamtx_port` / 环境变量覆盖）；
+主机通过 SSH `-L` 映射后的 `rtsp://127.0.0.1:8557/ai_out` 查看。
 
 ### 3.3 配置热更新
 
@@ -149,8 +181,18 @@ src/manager/video_stream_manager.cpp
    根据配置创建多路 VideoStream；OSDAssociatedModel/initializeOSDForAIStream 与 ax650 一致
 
 src/manager/video_stream.cpp
-   OpenCV 解码 -> 推理（单模型直连或 InferenceManager 多模型调度）
-   -> OSDRenderer 画框 -> MP4 / h264_rkmpp RTSP 输出
+   每路输入拆两条流（与 ax650 一致）：
+   主码流：H264Demux -> MPP 解码 -> RGA -> CPU 画框 -> MPP 编码 -> rtp_pusher/文件
+   AI 流：FrameBroker 取帧 -> RGA 640 -> 推理 -> SharedAIResult
+
+common/rk_media.{h,cpp}
+   档位2 硬件层：MPP mpi_dec（对应 VDEC）/ mpp_enc（对应 VENC）/ RGA（对应 IVPS）
+
+common/h264_demux.{h,cpp}
+   FFmpeg libavformat 解封装（对应 VideoDemux）
+
+common/common_pipeline/rtp_pusher.{c,h}
+   与 ax650 同源：RTP/UDP 推 MediaMTX
 
 src/manager/ai_processor.cpp
    根据配置 plugin 字段或默认 ./libmanhole_plugin.so dlopen 插件，
@@ -174,5 +216,6 @@ plugins/model_manhole_cover.cpp
 含 `roi_from_previous/independent/params`、`global_settings` 含
 `mediamtx_host/mediamtx_port/default_*/enable_raw_stream`）。
 
-后续接入告警、业务回调或替换输入输出模块时，在 `VideoStream::runLoop()` 的
-推理返回后使用 `AI_RESULT_T`；先保持离线视频链路跑通，再替换输入输出模块。
+后续接入告警、业务回调或替换输入输出模块时，在 AI 流推理返回后使用 `AI_RESULT_T`；
+先保持离线视频链路跑通，再替换输入输出模块。OSD（IVPS region 降级）由主码流编码线程
+在编码前拉取 `SharedAIResult` 并 CPU 画框。

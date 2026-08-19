@@ -192,6 +192,11 @@ model_deployment/rk3588/manhole_cover_detection/
 │   └── manager/                       # config_service / ai_processor / video_stream /
 │                                      # video_stream_manager / inference_engine /
 │                                      # inference_manager / osd_renderer / ai_pipeline_config
+├── common/
+│   ├── rk_media.{h,cpp}               # 档位2：MPP 解码/编码 + RGA（对应 VDEC/IVPS/VENC）
+│   ├── h264_demux.{h,cpp}             # FFmpeg 解封装（对应 VideoDemux）
+│   ├── frame_broker.h                 # 主码流<->AI 流共享
+│   └── common_pipeline/rtp_pusher.{c,h}  # 与 ax650 同源 RTP 推流
 ├── plugins/model_manhole_cover.cpp    # -> libmanhole_plugin.so（IAIModel 实现，内部 RKNN）
 ├── src/
 │   ├── main.cpp                       # -c/-m offline|stream/-o/--mediamtx*/--enable-raw
@@ -204,13 +209,13 @@ model_deployment/rk3588/manhole_cover_detection/
     └── lib/librknnrt.so
 ```
 
-`rknpu2/` 已随仓库提交，`CMakeLists.txt` 默认从 `rknpu2/include` 和 `rknpu2/lib` 查找
-`rknn_api.h` 与 `librknnrt.so`，克隆后可直接编译。如需核对/重新获取（Rockchip 官方
-`rknn_model_zoo` 提交 `bad6c7334531becaf90a561988519b7bec34d0ab`，curl 下载地址见
-`model_deployment/rk3588/manhole_cover_detection/SOP.md` §1 与 `readme.txt`）。
+`rknpu2/` 已随仓库提交，克隆后可直接编译。档位2 还需 MPP/RGA 开发头文件（apt 或
+GitHub 固定版本下载，含 URL，见 `model_deployment/rk3588/manhole_cover_detection/SOP.md`
+§1.1 与 `readme.txt`「MPP/RGA 依赖」）。
 
-该工程与 AX650 板端工程同构（配置驱动 + dlopen 插件 ABI + 多流管理），推理后端为
-RKNPU2。当前模型是单输出 `[1,9,8400]`，因此插件后处理按当前五分类输出实现，
+该工程与 AX650 板端工程同构（配置驱动 + dlopen 插件 ABI + 多流管理 + 每路输入拆
+主码流/AI 流），推理后端为 RKNPU2，硬件流水线为 MPP(解码/编码)+RGA(缩放)（档位2）。
+当前模型是单输出 `[1,9,8400]`，因此插件后处理按当前五分类输出实现，
 不能直接套用三分支 DFL 后处理。
 
 ### 4.2 编译
@@ -238,8 +243,8 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ./demo -c ../config/streams_config.json -m offline -o /tmp/output_manhole.mp4
 ```
 
-程序逐帧读取视频，插件完成 RGB letterbox、RKNN 推理、解码/NMS，CPU 绘制检测框并
-保存输出视频（OpenCV `mp4v`）。阈值由配置 `conf_thres/nms_thres`（或 `models[]` 的
+流程：`H264Demux -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
+（raw H.264）-> ffmpeg 封装 MP4`。阈值由配置 `conf_thres/nms_thres`（或 `models[]` 的
 `conf_threshold/nms_threshold`）下发。
 
 后续接入告警、推流或插件时，在 `VideoStream::runLoop()` 的 `processFrame` 返回后
@@ -291,9 +296,8 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ./demo -c ../config/streams_config.json -m stream
 ```
 
-在线输出使用 RK3588 板端 `h264_rkmpp` 编码器，默认发布到
-`rtsp://127.0.0.1:8554/ai_out`（可在配置 `rtsp_output_url` 覆盖）。主机查看或录制
-必须使用 SSH 映射端口 `8557`：
+在线输出使用板端 MPP 硬件编码 + `rtp_pusher`（RTP/UDP）推送到 MediaMTX（默认
+`127.0.0.1:8000`，与 AX650 一致）。主机查看或录制必须使用 SSH 映射端口 `8557`：
 
 ```bash
 ffplay -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out

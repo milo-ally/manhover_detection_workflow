@@ -3,26 +3,13 @@
 
 #include <opencv2/imgproc.hpp>
 
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
+#include <cstdlib>
 #include <sstream>
-#include <cmath>
 
 namespace {
 
-bool is_rtsp_url(const std::string& value) {
-    return value.rfind("rtsp://", 0) == 0 || value.rfind("rtsps://", 0) == 0;
-}
-
-std::string shell_quote(const std::string& value) {
-    std::string quoted = "'";
-    for (char c : value) {
-        if (c == '\'') quoted += "'\\''";
-        else quoted += c;
-    }
-    return quoted + "'";
-}
+inline int align16(int v) { return (v + 15) & ~15; }
 
 }  // namespace
 
@@ -39,24 +26,24 @@ bool VideoStream::start() {
     if (running_.load()) return true;
     ended_.store(false);
 
-    // 打开输入：RTSP 走 TCP（SSH 隧道只转发 TCP），本地文件直接打开
-    if (is_rtsp_url(config_.inputSource)) {
-        setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
-        if (!capture_.open(config_.inputSource, cv::CAP_FFMPEG)) {
-            ALOGE("[VideoStream] Stream %d: cannot open RTSP input: %s",
-                  config_.streamId, config_.inputSource.c_str());
-            return false;
-        }
-    } else {
-        if (!capture_.open(config_.inputSource)) {
-            ALOGE("[VideoStream] Stream %d: cannot open file input: %s",
-                  config_.streamId, config_.inputSource.c_str());
-            return false;
-        }
-    }
+    if (isMainStream()) {
+        // ===== 主码流：demux + MPP 解码 + RGA + OSD + MPP 编码 + RTP/文件 =====
+        demux_ = std::make_unique<H264Demux>();
+        decoder_ = std::make_unique<RkDecoder>();
+        encoder_ = std::make_unique<RkEncoder>();
+        decoder_->setFrameCallback([this](const RkNv12Frame& f) { onDecodedFrame(f); });
+        encoder_->setPacketCallback([this](const uint8_t* d, size_t s) { pushToOutput(d, s); });
 
-    // 创建 AI 处理器（启用 AI 时），支持多模型阶段
-    if (config_.enableAI) {
+        openOutput();
+        if (!decoder_->init()) {
+            ALOGE("[VideoStream] Stream %d: MPP decoder init failed", config_.streamId);
+            return false;
+        }
+        ALOGN("[VideoStream] Stream %d: main stream start, input=%s, out=%dx%d@%d bps=%dk",
+              config_.streamId, config_.inputSource.c_str(),
+              config_.outputWidth, config_.outputHeight, config_.fps, config_.bitrateKbps);
+    } else if (isAIStream()) {
+        // ===== AI 流：broker -> RGA 640 -> 插件推理 =====
         if (!config_.modelStages.empty()) {
             rebuildProcessors(config_.modelStages, "", "");
         } else {
@@ -67,22 +54,227 @@ bool VideoStream::start() {
             return false;
         }
         inferenceManager_->configure(aiProcessors_, config_.modelStages, config_.aiPipelineMode);
-        osdRenderer_->init();
-        ALOGN("[VideoStream] Stream %d: %zu AI processor(s) ready",
-              config_.streamId, aiProcessors_.size());
-    }
-
-    if (!openOutput()) {
-        ALOGE("[VideoStream] Stream %d: cannot open output", config_.streamId);
+        aiBgrBuf_.resize(config_.aiOutputWidth * config_.aiOutputHeight * 3);
+        ALOGN("[VideoStream] Stream %d: AI stream start, ai=%dx%d, %zu processor(s)",
+              config_.streamId, config_.aiOutputWidth, config_.aiOutputHeight,
+              aiProcessors_.size());
+    } else {
+        ALOGE("[VideoStream] Stream %d: no role configured (main/AI)", config_.streamId);
         return false;
     }
 
     running_.store(true);
-    workerThread_ = std::thread(&VideoStream::runLoop, this);
-    ALOGN("[VideoStream] Stream %d started: input=%s, ai=%d",
-          config_.streamId, config_.inputSource.c_str(), config_.enableAI ? 1 : 0);
+    workerThread_ = std::thread(isMainStream() ? &VideoStream::mainLoop
+                                               : &VideoStream::aiLoop, this);
     return true;
 }
+
+// ============================ 主码流 ============================
+
+void VideoStream::mainLoop() {
+    if (!demux_->open(config_.inputSource)) {
+        ALOGE("[VideoStream] Stream %d: cannot open input: %s",
+              config_.streamId, config_.inputSource.c_str());
+        ended_.store(true);
+        return;
+    }
+    demux_->setPacketCallback([this](const uint8_t* d, size_t s) {
+        return decoder_->sendPacket(d, s);
+    });
+
+    while (running_.load() && !demux_->eof()) {
+        if (!demux_->readOnce()) {
+            // EOF 或回调停止
+        }
+    }
+    ALOGN("[VideoStream] Stream %d: main loop exited, frames=%ld",
+          config_.streamId, frameCount_.load());
+    ended_.store(true);
+}
+
+// 解码帧回调（主码流线程内同步执行）
+void VideoStream::onDecodedFrame(const RkNv12Frame& frame) {
+    if (!frame.valid()) return;
+
+    // 1) 共享给 AI 流（latest-frame 语义）
+    if (broker_) broker_->publish(frame.data, frame.width, frame.height, frame.stride);
+
+    // 2) 首帧初始化编码器（编码尺寸/码率来自配置）
+    if (!encoderReady_) {
+        outStride_ = align16(config_.outputWidth);
+        bgrBuf_.resize(static_cast<size_t>(config_.outputWidth) * config_.outputHeight * 3);
+        nv12Out_.resize(static_cast<size_t>(outStride_) * config_.outputHeight * 3 / 2);
+        if (!encoder_->init(config_.outputWidth, config_.outputHeight, outStride_,
+                            config_.fps, config_.bitrateKbps)) {
+            ALOGE("[VideoStream] Stream %d: MPP encoder init failed", config_.streamId);
+            ended_.store(true);
+            return;
+        }
+        std::vector<uint8_t> hdr;
+        if (encoder_->getHeader(hdr) && !hdr.empty()) pushToOutput(hdr.data(), hdr.size());
+        encoderReady_ = true;
+    }
+
+    // 3) RGA：NV12 -> 输出尺寸 NV12
+    nv12Tmp_.resize(static_cast<size_t>(config_.outputWidth) * config_.outputHeight * 3 / 2);
+    if (!rga_ops::resizeNv12(frame.data, frame.width, frame.height, frame.stride,
+                             nv12Tmp_.data(), config_.outputWidth, config_.outputHeight,
+                             config_.outputWidth)) {
+        return;
+    }
+    // 4) RGA：NV12 -> BGR（画框缓冲）
+    if (!rga_ops::nv12ToBgr(nv12Tmp_.data(), config_.outputWidth, config_.outputHeight,
+                            config_.outputWidth, bgrBuf_.data())) {
+        return;
+    }
+    // 5) OSD（IVPS OSD region 降级）：主码流编码线程拉取 AI 结果并 CPU 画框
+    if (aiResult_) {
+        AI_RESULT_T result;
+        if (aiResult_->get(result) && osdRenderer_) {
+            cv::Mat bgr(config_.outputHeight, config_.outputWidth, CV_8UC3, bgrBuf_.data());
+            osdRenderer_->update(&result, config_.outputWidth, config_.outputHeight,
+                                 config_.outputWidth, config_.outputHeight, bgr);
+        }
+    }
+    // 6) RGA：BGR -> NV12（编码输入）
+    if (!rga_ops::bgrToNv12(bgrBuf_.data(), config_.outputWidth, config_.outputHeight,
+                            nv12Out_.data(), outStride_)) {
+        return;
+    }
+    // 7) MPP 编码 -> 回调 pushToOutput -> RTP/文件
+    RkNv12Frame enc;
+    enc.data = nv12Out_.data();
+    enc.width = config_.outputWidth;
+    enc.height = config_.outputHeight;
+    enc.stride = outStride_;
+    enc.size = nv12Out_.size();
+    if (!encoder_->encodeFrame(enc)) {
+        ALOGE("[VideoStream] Stream %d: encode frame failed", config_.streamId);
+        return;
+    }
+
+    const long count = frameCount_.fetch_add(1) + 1;
+    if (count % 300 == 1) {
+        ALOGN("[VideoStream] Stream %d: frame=%ld", config_.streamId, count);
+    }
+}
+
+void VideoStream::openOutput() {
+    if (config_.isFileOutput && !config_.outputFilePath.empty()) {
+        fileOut_ = fopen(config_.outputFilePath.c_str(), "wb");
+        if (!fileOut_) {
+            ALOGE("[VideoStream] Stream %d: cannot open output file: %s",
+                  config_.streamId, config_.outputFilePath.c_str());
+        }
+        ALOGN("[VideoStream] Stream %d: output_mode=file %s",
+              config_.streamId, config_.outputFilePath.c_str());
+        return;
+    }
+    if (config_.isMediaMTXOutput && !config_.mediamtxEndpoint.empty()) {
+        std::string host = config_.mediamtxEndpoint;
+        uint16_t port = 8000;
+        size_t colon = host.find(':');
+        if (colon != std::string::npos) {
+            port = static_cast<uint16_t>(atoi(host.substr(colon + 1).c_str()));
+            host = host.substr(0, colon);
+        }
+        if (rtp_pusher_init(&rtpPusher_, host.c_str(), port, 0) == 0) {
+            rtpReady_ = true;
+            ALOGN("[VideoStream] Stream %d: output_mode=rtp MediaMTX %s:%u",
+                  config_.streamId, host.c_str(), port);
+        } else {
+            ALOGE("[VideoStream] Stream %d: rtp_pusher_init failed: %s:%u",
+                  config_.streamId, host.c_str(), port);
+        }
+    }
+}
+
+void VideoStream::pushToOutput(const uint8_t* data, size_t size) {
+    if (fileOut_) {
+        fwrite(data, 1, size, fileOut_);
+        return;
+    }
+    if (rtpReady_) {
+        pushH264ToRtp(data, size);
+    }
+}
+
+void VideoStream::pushH264ToRtp(const uint8_t* data, size_t size) {
+    // 按起始码切分 NAL，逐个推 RTP（rtp_pusher 内部处理 RTP 分片）
+    const uint64_t pts = static_cast<uint64_t>(frameCount_.load()) * 1000000 / config_.fps;
+    size_t pos = 0;
+    while (pos + 4 <= size) {
+        size_t start = pos;
+        while (pos + 4 <= size) {
+            if (data[pos] == 0 && data[pos + 1] == 0 && data[pos + 2] == 1) {
+                pos += 3;
+                break;
+            }
+            if (data[pos] == 0 && data[pos + 1] == 0 && data[pos + 2] == 0 && data[pos + 3] == 1) {
+                pos += 4;
+                break;
+            }
+            ++pos;
+        }
+        if (pos > size) break;
+        // [start, pos) 是一个 NAL（含起始码）
+        rtp_pusher_push_nalu(&rtpPusher_, data + start, static_cast<uint32_t>(pos - start), pts);
+        if (pos + 4 > size) break;
+    }
+}
+
+// ============================ AI 流 ============================
+
+void VideoStream::aiLoop() {
+    Nv12FrameData frame;
+    std::vector<uint8_t> nv12Tmp;
+    const int aiW = config_.aiOutputWidth;
+    const int aiH = config_.aiOutputHeight;
+    nv12Tmp.resize(static_cast<size_t>(aiW) * aiH * 3 / 2);
+
+    while (running_.load()) {
+        if (!broker_ || !broker_->consumeLatest(frame)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+        // RGA：NV12 -> 640x640
+        if (!rga_ops::resizeNv12(frame.data.data(), frame.width, frame.height, frame.stride,
+                                 nv12Tmp.data(), aiW, aiH, aiW)) {
+            continue;
+        }
+        // RGA：NV12 -> BGR 640
+        if (!rga_ops::nv12ToBgr(nv12Tmp.data(), aiW, aiH, aiW, aiBgrBuf_.data())) {
+            continue;
+        }
+        // 插件推理（BGR24 AI_FRAME_T，640x640 时 letterbox 为恒等）
+        AI_RESULT_T result;
+        memset(&result, 0, sizeof(result));
+        AI_FRAME_T f;
+        f.data = aiBgrBuf_.data();
+        f.width = aiW;
+        f.height = aiH;
+        f.stride = aiW * 3;
+        f.format = AI_FRAME_FORMAT_BGR24;
+
+        bool ok = false;
+        if (hasMultipleProcessors()) {
+            ok = inferenceManager_->run(&f, &result);
+        } else if (aiProcessors_[0]) {
+            ok = aiProcessors_[0]->processFrame(&f, &result);
+        }
+        if (ok && aiResult_) {
+            aiResult_->set(result);
+        }
+        const long count = frameCount_.fetch_add(1) + 1;
+        if (ok && result.nObjSize > 0 && count % 300 == 1) {
+            ALOGN("[VideoStream] Stream %d: AI detections=%u", config_.streamId, result.nObjSize);
+        }
+    }
+    ALOGN("[VideoStream] Stream %d: AI loop exited, frames=%ld",
+          config_.streamId, frameCount_.load());
+}
+
+// ============================ 通用 ============================
 
 void VideoStream::rebuildProcessors(const std::vector<ModelStageConfig>& stages,
                                     const std::string& singlePath, const std::string& singleName) {
@@ -118,123 +310,28 @@ void VideoStream::rebuildProcessors(const std::vector<ModelStageConfig>& stages,
     }
 }
 
-bool VideoStream::openOutput() {
-    const double fps = capture_.get(cv::CAP_PROP_FPS);
-    const int width = static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_WIDTH));
-    const int height = static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_HEIGHT));
-    const double effFps = (fps > 0.0 && std::isfinite(fps)) ? fps : 25.0;
-
-    if (config_.isFileOutput && !config_.outputFilePath.empty()) {
-        writer_.open(config_.outputFilePath, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                     effFps, cv::Size(width, height));
-        if (!writer_.isOpened()) {
-            ALOGE("[VideoStream] Stream %d: cannot open output video %s (check codec support)",
-                  config_.streamId, config_.outputFilePath.c_str());
-            return false;
-        }
-        ALOGN("[VideoStream] Stream %d: output_mode=file %s (%dx%d, %.2f fps)",
-              config_.streamId, config_.outputFilePath.c_str(), width, height, effFps);
-    } else if (is_rtsp_url(config_.rtspOutputUrl)) {
-        std::ostringstream command;
-        command << "ffmpeg -loglevel warning -f rawvideo -pix_fmt bgr24"
-                << " -s " << width << "x" << height
-                << " -r " << effFps << " -i pipe:0 -an"
-                << " -c:v h264_rkmpp -pix_fmt yuv420p -f rtsp"
-                << " -rtsp_transport tcp " << shell_quote(config_.rtspOutputUrl);
-        ALOGN("[VideoStream] Stream %d: output_mode=rtsp command=%s",
-              config_.streamId, command.str().c_str());
-        streamPipe_ = popen(command.str().c_str(), "w");
-        if (!streamPipe_) {
-            ALOGE("[VideoStream] Stream %d: cannot start ffmpeg RTSP output: %s",
-                  config_.streamId, config_.rtspOutputUrl.c_str());
-            return false;
-        }
-    } else {
-        ALOGE("[VideoStream] Stream %d: no valid output configured", config_.streamId);
-        return false;
-    }
-    return true;
-}
-
-void VideoStream::closeOutput() {
-    if (streamPipe_) {
-        pclose(streamPipe_);
-        streamPipe_ = nullptr;
-    }
-    if (writer_.isOpened()) {
-        writer_.release();
-    }
-}
-
-void VideoStream::runLoop() {
-    cv::Mat frame;
-    while (running_.load()) {
-        if (!capture_.read(frame)) {
-            ALOGN("[VideoStream] Stream %d: input ended or failed: %s",
-                  config_.streamId, config_.inputSource.c_str());
-            ended_.store(true);
-            break;
-        }
-
-        if (config_.enableAI && !aiProcessors_.empty()) {
-            AI_RESULT_T result;
-            memset(&result, 0, sizeof(result));
-            AI_FRAME_T aiFrame;
-            aiFrame.data = frame.data;
-            aiFrame.width = frame.cols;
-            aiFrame.height = frame.rows;
-            aiFrame.stride = static_cast<int>(frame.step);
-            aiFrame.format = AI_FRAME_FORMAT_BGR24;
-
-            bool ok = false;
-            if (hasMultipleProcessors()) {
-                ok = inferenceManager_->run(&aiFrame, &result);
-            } else if (aiProcessors_[0]) {
-                ok = aiProcessors_[0]->processFrame(&aiFrame, &result);
-            }
-            if (ok && result.nObjSize > 0 && osdRenderer_) {
-                osdRenderer_->update(&result, frame.cols, frame.rows, frame.cols, frame.rows, frame);
-            }
-        }
-
-        // 输出：RTSP 管道或文件
-        if (streamPipe_) {
-            if (!frame.isContinuous()) {
-                frame = frame.clone();
-            }
-            const size_t bytes = frame.total() * frame.elemSize();
-            if (fwrite(frame.data, 1, bytes, streamPipe_) != bytes) {
-                ALOGE("[VideoStream] Stream %d: ffmpeg RTSP output pipe closed",
-                      config_.streamId);
-                ended_.store(true);
-                break;
-            }
-            fflush(streamPipe_);
-        } else if (writer_.isOpened()) {
-            writer_.write(frame);
-        }
-
-        const long count = frameCount_.fetch_add(1) + 1;
-        if (count % 100 == 1) {
-            ALOGN("[VideoStream] Stream %d: frame=%ld", config_.streamId, count);
-        }
-    }
-    ALOGN("[VideoStream] Stream %d: worker exited, frames=%ld",
-          config_.streamId, frameCount_.load());
-}
-
 void VideoStream::stop() {
     if (!running_.load() && !workerThread_.joinable()) return;
     running_.store(false);
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
+    if (decoder_) decoder_->deinit();
+    if (encoder_) encoder_->deinit();
     closeOutput();
-    if (capture_.isOpened()) {
-        capture_.release();
-    }
     std::lock_guard<std::mutex> lock(stateMutex_);
     aiProcessors_.clear();
+}
+
+void VideoStream::closeOutput() {
+    if (fileOut_) {
+        fclose(fileOut_);
+        fileOut_ = nullptr;
+    }
+    if (rtpReady_) {
+        rtp_pusher_deinit(&rtpPusher_);
+        rtpReady_ = false;
+    }
 }
 
 void VideoStream::updateConfig(const StreamConfig& newConfig) {
@@ -252,9 +349,7 @@ void VideoStream::setAIEnabled(bool enable) {
 }
 
 void VideoStream::clearOSD() {
-    if (osdRenderer_) {
-        osdRenderer_->clear();
-    }
+    if (osdRenderer_) osdRenderer_->clear();
 }
 
 void VideoStream::processFrame(const AI_FRAME_T* frame, AI_RESULT_T* result) {
@@ -277,9 +372,6 @@ void VideoStream::setAIProcessors(std::vector<std::unique_ptr<AIProcessor>> proc
     aiProcessors_.clear();
     for (auto& p : processors) {
         aiProcessors_.push_back(std::move(p));
-    }
-    if (aiProcessors_.size() > 1) {
-        config_.aiPipelineMode = AIPipelineMode::Parallel;
     }
     inferenceManager_->configure(aiProcessors_, config_.modelStages, config_.aiPipelineMode);
 }

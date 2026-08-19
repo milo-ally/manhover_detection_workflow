@@ -61,7 +61,9 @@ cp model_convert/rk3588/output/manhole-cover-yolo11s-production.rknn \
 ```
 
 RKNN 运行时 `rknpu2/`（`include/rknn_api.h` + `lib/librknnrt.so`，aarch64）**已随仓库
-提交**，无需额外准备即可编译。如需核对/重新获取（固定来自 Rockchip `rknn_model_zoo`
+提交**，无需额外准备即可编译。**MPP/RGA 开发头文件不随仓库提交**，需按工程内
+`SOP.md` §1.1 或 `readme.txt`「MPP/RGA 依赖」准备（apt 或 GitHub 固定版本下载，
+含完整 URL）。RKNN 运行时如需核对/重新获取（固定来自 Rockchip `rknn_model_zoo`
 提交 `bad6c7334531becaf90a561988519b7bec34d0ab`，详见工程内 `SOP.md` §1 与
 `readme.txt`），下载地址：
 
@@ -84,39 +86,40 @@ InferenceManager（多模型调度）、OSDRenderer（画框）；解码/输出�
 ### 2.1 数据流总览（主码流 = AI 流，单软件流水线）
 
 ```text
-输入 RTSP / 本地视频
+输入 RTSP / 本地视频（H.264）
    │
    ▼
-OpenCV VideoCapture（RTSP 强制 tcp；本地文件直读）
-   │  每路输入一个 VideoStream，一个 runLoop 线程
+H264Demux（FFmpeg libavformat，RTSP 强制 tcp；h264_mp4toannexb）
+   │
    ▼
-cv::Mat BGR 帧 ────────────────────────────────────────────────┐
-   │                                                           │
-   │  包装为 AI_FRAME_T{BGR24, w, h, stride}                   │
-   ▼                                                           │
-AIProcessor::processFrame（单模型）                            │
-  或 InferenceManager::run（并行 / 串行 ROI）                  │
-   │                                                           │
-   ▼                                                           │
-插件 libmanhole_plugin.so：                                    │
-  BGR→RGB letterbox(114) → rknn 推理                           │
-  → output0 [1,9,8400] 解码 + 分类别 NMS                      │
-  → AI_RESULT_T（归一化坐标）                                  │
-   │                                                           │
-   ▼                                                           │
-OSDRenderer::update → DefaultOSDRenderer.render                │
-  → cv::rectangle/putText 画在【同一个 BGR 帧】                │
-   │                                                           │
-   ▼                                                           │
-输出：                                                        │
-  offline: OpenCV VideoWriter(mp4v) → MP4                     │
-  stream:  popen(ffmpeg h264_rkmpp → RTSP → MediaMTX)         │
-           主机经 SSH -L 8557 查看 ◄──────────────────────────┘
+RkDecoder（MPP mpi_dec，H.264→NV12）◄────── 对应 AX650 VDEC
+   │
+   ├───────────────────────────────┬──────────────────────────────┐
+   ▼                               ▼                              ▼
+【主码流：输出流】              【AI 流：推理流】
+ RGA NV12→BGR(输出尺寸)           FrameBroker 取最新 NV12 帧
+   │  （对应 AX650 IVPS）            │
+   ▼                                ▼
+ CPU 画框（OSD 降级：            RGA NV12→BGR(640x640)
+  拉取 SharedAIResult，              │
+  DefaultOSDRenderer 绘制）          ▼
+   │                              插件 libmanhole_plugin.so
+   ▼                                （RKNN 推理 → AI_RESULT_T）
+ RGA BGR→NV12(输出尺寸)              │
+   │                                ▼
+   ▼                            SharedAIResult.set()
+ RkEncoder（MPP mpi_enc）           （对应 AX650 OSDAssociatedModel）
+   │  （对应 AX650 VENC）            │
+   ▼                                │
+ rtp_pusher → MediaMTX(RTP)  ◄──────┘（主码流编码线程读取，跨流叠加画框）
+ 或离线 raw H.264 文件 + ffmpeg 封装 MP4
 ```
 
-要点：RK3588 的主码流与 AI 流**合并为同一路软件流水线**——解码后的同一帧先送推理、
-再 CPU 画框、再编码输出；不存在 AX650 的"跨流 OSD 硬件叠加"，因此没有独立的 OSD
-更新线程，画框内联在 `VideoStream::runLoop()` 中。
+要点：与 AX650 完全一致，**每路输入拆主码流 + AI 流两条流水线**——主码流负责
+`解封装→MPP 解码→RGA 缩放→画框→MPP 编码→RTP/文件`，AI 流负责
+`RGA 640→RKNN 推理→SharedAIResult`；OSD 通过主码流编码线程拉取 AI 结果并 CPU 画框
+（IVPS OSD region 的降级实现），主码流与 AI 流共享解码帧（FrameBroker，latest-frame
+语义，对应 AX650 共享 VDEC 组）。
 
 ### 2.2 核心链路
 
@@ -346,9 +349,9 @@ cmake --install build
 前置条件：
 
 ```text
-rknpu2/include/rknn_api.h 和 rknpu2/lib/librknnrt.so 已随仓库提交（直接可用；
-  如需重新获取见 §1 的下载地址或 SOP.md §1）
-OpenCV core/imgproc/videoio 开发文件（无则运行 install_opencv.sh）
+rknpu2/include/rknn_api.h 和 rknpu2/lib/librknnrt.so 已随仓库提交（直接可用）
+MPP/RGA 开发头文件已准备（SOP.md §1.1：apt 或 third-party 下载，含官方 URL）
+FFmpeg 开发库（libavformat/libavcodec/libavutil）与 OpenCV core/imgproc
 models/manhole-cover-yolo11s-production.rknn 已放置（模型不提交 Git）
 ```
 
