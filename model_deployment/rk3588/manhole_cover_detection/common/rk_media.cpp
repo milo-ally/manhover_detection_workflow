@@ -47,27 +47,11 @@ bool RkDecoder::init() {
     return true;
 }
 
-// 首帧 info-change：解码器会先发一个仅含 SPS/PPS 信息的帧，需要用该分辨率
-// 建外部 buffer group 并喂回解码器，再 mark info-change-ready 让它继续正常解码。
+// 首帧 info-change：解码器会先发一个仅含 SPS/PPS 信息的帧，需用该分辨率
+// 配置解码器（内部 buffer 模式下 MPP 自管输出缓冲），然后 mark info-change-ready
+// 让它继续正常解码。此模式不需要外部 buffer group，最简单可靠。
 bool RkDecoder::setupBufferGroup(int bufSize) {
-    // MPP_BUFFER_TYPE_ION 在 Linux/mali 上可用；DMA-HEAP 亦可。
-    MppBufferGroup grp = nullptr;
-    // 预留 12 个解码帧缓冲（与官方 demo 外部模式一致）
-    MPP_RET ret = mpp_buffer_group_get_external(&grp, MPP_BUFFER_TYPE_ION);
-    if (ret != MPP_OK) {
-        fprintf(stderr, "[RkMedia] mpp_buffer_group_get failed ret=%d\n", ret);
-        return false;
-    }
-    if (bufSize > 0) {
-        mpp_buffer_group_limit_config(grp, (size_t)bufSize, 12);
-    }
-    ret = mpi_of(mpi_)->control(ctx_of(ctx_), MPP_DEC_SET_EXT_BUF_GROUP, grp);
-    if (ret != MPP_OK) {
-        fprintf(stderr, "[RkMedia] MPP_DEC_SET_EXT_BUF_GROUP failed ret=%d\n", ret);
-        mpp_buffer_group_put(grp);
-        return false;
-    }
-    bufGroup_ = grp;
+    (void)bufSize;
     return true;
 }
 
