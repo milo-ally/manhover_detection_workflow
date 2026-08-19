@@ -39,6 +39,11 @@ bool VideoStream::start() {
             ALOGE("[VideoStream] Stream %d: MPP decoder init failed", config_.streamId);
             return false;
         }
+        // OSD 渲染器必须先 init（initialized_ 默认 false，未 init 时 update 直接返回、不画框）
+        if (!osdRenderer_->init()) {
+            ALOGE("[VideoStream] Stream %d: OSD renderer init failed", config_.streamId);
+            return false;
+        }
         ALOGN("[VideoStream] Stream %d: main stream start, input=%s, out=%dx%d@%d bps=%dk",
               config_.streamId, config_.inputSource.c_str(),
               config_.outputWidth, config_.outputHeight, config_.fps, config_.bitrateKbps);
