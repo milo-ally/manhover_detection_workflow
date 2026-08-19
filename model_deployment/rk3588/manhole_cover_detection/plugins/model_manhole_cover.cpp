@@ -1,9 +1,16 @@
+// RK3588 井盖检测插件。
+// 与 AX650 的 plugins/model_manhole_cover.cpp 同构：实现 IAIModel ABI，
+// 由主程序 dlopen 加载（libmanhole_plugin.so）。推理后端为 RKNPU2（rknn API）。
+
 #include "rknpu_manhole.hpp"
+#include "ai_interface.h"
 
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -14,15 +21,23 @@ namespace {
 constexpr int kClassCount = 5;
 constexpr int kModelSize = 640;
 constexpr int kBoxFields = 4;
-const char *kClassNames[kClassCount] = {"good", "broke", "lose", "uncovered", "circle"};
+constexpr float kDefaultConf = 0.25f;
+constexpr float kDefaultNms = 0.45f;
+const char* kClassNames[kClassCount] = {"good", "broke", "lose", "uncovered", "circle"};
 
-float iou(const cv::Rect &a, const cv::Rect &b) {
+float read_env_float(const char* key, float def) {
+    const char* v = std::getenv(key);
+    if (!v || !*v) return def;
+    return static_cast<float>(atof(v));
+}
+
+float iou(const cv::Rect& a, const cv::Rect& b) {
     const int intersection = (a & b).area();
     const int union_area = a.area() + b.area() - intersection;
     return union_area > 0 ? static_cast<float>(intersection) / union_area : 0.0f;
 }
 
-void dump_attr(const char *prefix, const rknn_tensor_attr &attr) {
+void dump_attr(const char* prefix, const rknn_tensor_attr& attr) {
     std::cout << prefix << " name=" << attr.name << " dims=";
     for (uint32_t i = 0; i < attr.n_dims; ++i) {
         std::cout << (i == 0 ? "[" : ",") << attr.dims[i];
@@ -38,7 +53,7 @@ int clamp_int(int value, int low, int high) {
 
 }  // namespace
 
-const char *class_name(int class_id) {
+const char* class_name(int class_id) {
     return class_id >= 0 && class_id < kClassCount ? kClassNames[class_id] : "unknown";
 }
 
@@ -46,7 +61,7 @@ ManholeRknn::~ManholeRknn() {
     release();
 }
 
-bool ManholeRknn::init(const std::string &model_path) {
+bool ManholeRknn::init(const std::string& model_path) {
     release();
 
     std::ifstream file(model_path, std::ios::binary | std::ios::ate);
@@ -61,7 +76,7 @@ bool ManholeRknn::init(const std::string &model_path) {
     }
     model_data_.resize(static_cast<size_t>(size));
     file.seekg(0, std::ios::beg);
-    if (!file.read(reinterpret_cast<char *>(model_data_.data()), size)) {
+    if (!file.read(reinterpret_cast<char*>(model_data_.data()), size)) {
         std::cerr << "cannot read model: " << model_path << std::endl;
         return false;
     }
@@ -159,9 +174,9 @@ void ManholeRknn::release() {
     no_detection_debug_printed_ = false;
 }
 
-bool ManholeRknn::prepare_input(const cv::Mat &bgr, cv::Mat &letterboxed,
-                                float &gain, float &pad_x, float &pad_y,
-                                std::vector<uint8_t> &nchw_buffer) {
+bool ManholeRknn::prepare_input(const cv::Mat& bgr, cv::Mat& letterboxed,
+                                float& gain, float& pad_x, float& pad_y,
+                                std::vector<uint8_t>& nchw_buffer) {
     if (bgr.empty() || bgr.channels() != 3) {
         return false;
     }
@@ -204,11 +219,11 @@ bool ManholeRknn::prepare_input(const cv::Mat &bgr, cv::Mat &letterboxed,
     return true;
 }
 
-bool ManholeRknn::decode_output(const float *output, size_t float_count,
-                                const cv::Size &original_size, float gain,
+bool ManholeRknn::decode_output(const float* output, size_t float_count,
+                                const cv::Size& original_size, float gain,
                                 float pad_x, float pad_y, float conf_threshold,
                                 float iou_threshold, int max_det,
-                                std::vector<Detection> &detections) const {
+                                std::vector<Detection>& detections) const {
     if (!output || float_count < static_cast<size_t>(output_channels_) * output_anchors_) {
         return false;
     }
@@ -274,7 +289,7 @@ bool ManholeRknn::decode_output(const float *output, size_t float_count,
         if (suppressed[index]) {
             continue;
         }
-        const auto &candidate = candidates[index];
+        const auto& candidate = candidates[index];
         Detection result;
         const float x1 = (candidate.box.x - pad_x) / gain;
         const float y1 = (candidate.box.y - pad_y) / gain;
@@ -314,7 +329,7 @@ bool ManholeRknn::decode_output(const float *output, size_t float_count,
     return true;
 }
 
-bool ManholeRknn::infer(const cv::Mat &bgr, std::vector<Detection> &detections,
+bool ManholeRknn::infer(const cv::Mat& bgr, std::vector<Detection>& detections,
                         float conf_threshold, float iou_threshold, int max_det) {
     detections.clear();
     cv::Mat letterboxed;
@@ -349,10 +364,104 @@ bool ManholeRknn::infer(const cv::Mat &bgr, std::vector<Detection> &detections,
         std::cerr << "rknn_outputs_get failed: " << ret << std::endl;
         return false;
     }
-    const bool ok = decode_output(static_cast<const float *>(output.buf),
+    const bool ok = decode_output(static_cast<const float*>(output.buf),
                                   output.size / sizeof(float), bgr.size(), gain,
                                   pad_x, pad_y, conf_threshold, iou_threshold,
                                   max_det, detections);
     rknn_outputs_release(context_, 1, &output);
     return ok;
+}
+
+// ============ IAIModel 插件封装（与 AX650 插件同构） ============
+
+class ManholeCoverModel : public IAIModel {
+public:
+    ManholeCoverModel() = default;
+    ~ManholeCoverModel() override = default;
+
+    int Init(const char* model_path) override {
+        // 阈值透传：优先 MANHOLE_*，回退 MODEL_*，默认 0.25 / 0.45
+        confThresh_ = read_env_float("MANHOLE_CONF_THRESH",
+                      read_env_float("MODEL_CONF_THRESH", kDefaultConf));
+        nmsThresh_ = read_env_float("MANHOLE_NMS_THRESH",
+                     read_env_float("MODEL_NMS_THRESH", kDefaultNms));
+        printf("[ManholeCover] Loading model: %s\n", model_path);
+        printf("[ManholeCover] thresholds: conf=%.3f nms=%.3f\n", confThresh_, nmsThresh_);
+        if (!rknn_.init(model_path)) {
+            printf("[ManholeCover][Error] RKNN init failed: %s\n", model_path);
+            return -1;
+        }
+        printf("[ManholeCover] Model initialized successfully\n");
+        return 0;
+    }
+
+    void GetInputSize(int* w, int* h) override {
+        if (w) *w = kModelSize;
+        if (h) *h = kModelSize;
+    }
+
+    int Inference(const AI_FRAME_T* pFrame, AI_RESULT_T* pResult) override {
+        if (!pFrame || !pResult || pFrame->format != AI_FRAME_FORMAT_BGR24 || !pFrame->data) {
+            fprintf(stderr, "[ManholeCover][Error] invalid inference arguments\n");
+            return -1;
+        }
+        memset(pResult, 0, sizeof(AI_RESULT_T));
+
+        // 包装平台无关帧为 cv::Mat（BGR，紧凑排列或带 stride）
+        const int step = pFrame->stride > 0 ? pFrame->stride
+                                            : pFrame->width * 3;
+        cv::Mat bgr(pFrame->height, pFrame->width, CV_8UC3,
+                    const_cast<void*>(pFrame->data), step);
+        if (bgr.empty()) {
+            fprintf(stderr, "[ManholeCover][Error] empty input frame\n");
+            return -1;
+        }
+
+        std::vector<Detection> detections;
+        if (!rknn_.infer(bgr, detections, confThresh_, nmsThresh_, MAX_DETECT_OBJ_NUM)) {
+            fprintf(stderr, "[ManholeCover][Error] inference failed\n");
+            return -1;
+        }
+
+        const float src_w = static_cast<float>(pFrame->width);
+        const float src_h = static_cast<float>(pFrame->height);
+        pResult->nObjSize = std::min(static_cast<uint32_t>(detections.size()),
+                                     static_cast<uint32_t>(MAX_DETECT_OBJ_NUM));
+        for (uint32_t i = 0; i < pResult->nObjSize; ++i) {
+            const Detection& det = detections[i];
+            AI_OBJ_T& out = pResult->objects[i];
+            out.x = det.box.x / src_w;
+            out.y = det.box.y / src_h;
+            out.w = det.box.width / src_w;
+            out.h = det.box.height / src_h;
+            out.class_id = det.class_id;
+            out.score = det.confidence;
+            snprintf(out.label, sizeof(out.label), "%s", class_name(det.class_id));
+        }
+
+        if (pResult->nObjSize > 0) {
+            fprintf(stderr, "[ManholeCover] detections=%u confidence:",
+                    static_cast<unsigned int>(pResult->nObjSize));
+            for (uint32_t i = 0; i < pResult->nObjSize; ++i) {
+                fprintf(stderr, " %.3f", pResult->objects[i].score);
+            }
+            fprintf(stderr, "\n");
+        }
+        return 0;
+    }
+
+    int Deinit() override {
+        rknn_.release();
+        return 0;
+    }
+
+private:
+    ManholeRknn rknn_;
+    float confThresh_ = kDefaultConf;
+    float nmsThresh_ = kDefaultNms;
+};
+
+extern "C" {
+    IAIModel* CreateAIModel() { return new ManholeCoverModel(); }
+    void DestroyAIModel(IAIModel* p) { delete p; }
 }

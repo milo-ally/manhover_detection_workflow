@@ -184,9 +184,20 @@ python3 src/val_detect_manhole_rknn.py \
 ```text
 model_deployment/rk3588/manhole_cover_detection/
 ├── CMakeLists.txt
-├── include/rknpu_manhole.hpp
-├── plugins/model_manhole_cover.cpp
-├── src/main.cpp
+├── config/streams_config.json         # 字段与 AX650 streams_config.json 完全一致
+├── include/
+│   ├── ai_interface.h                 # 平台无关插件 ABI（IAIModel / AI_RESULT_T / AI_FRAME_T）
+│   ├── rknpu_manhole.hpp
+│   ├── osd_renderer_interface.h       # IOSDRenderer / DefaultOSDRenderer
+│   └── manager/                       # config_service / ai_processor / video_stream /
+│                                      # video_stream_manager / inference_engine /
+│                                      # inference_manager / osd_renderer / ai_pipeline_config
+├── plugins/model_manhole_cover.cpp    # -> libmanhole_plugin.so（IAIModel 实现，内部 RKNN）
+├── src/
+│   ├── main.cpp                       # -c/-m offline|stream/-o/--mediamtx*/--enable-raw
+│   ├── osd_renderer_interface.cpp
+│   └── manager/*.cpp
+├── utilities/                         # json.hpp / sample_log.h
 ├── models/manhole-cover-yolo11s-production.rknn
 └── rknpu2/                    # 不随仓库提交（.gitignore 忽略），编译前需要放回
     ├── include/rknn_api.h
@@ -198,36 +209,41 @@ model_deployment/rk3588/manhole_cover_detection/
 Rockchip 官方 `rknn_model_zoo` 的 `3rdparty/rknpu2` 把对应 RK3588/aarch64 的 Runtime
 放回本目录（版本提交见 `model_deployment/rk3588/manhole_cover_detection/SOP.md`）。
 
-该工程参考官方 YOLO11 C++ 示例的 RKNN API 调用方式，但当前模型是单输出 `[1,9,8400]`，因此后处理按当前五分类输出实现，不能直接套用三分支 DFL 后处理。
+该工程与 AX650 板端工程同构（配置驱动 + dlopen 插件 ABI + 多流管理），推理后端为
+RKNPU2。当前模型是单输出 `[1,9,8400]`，因此插件后处理按当前五分类输出实现，
+不能直接套用三分支 DFL 后处理。
 
 ### 4.2 编译
 
 编译环境需要 AArch64 C++ 编译器、CMake、OpenCV `core/imgproc/videoio` 和 RKNN Runtime：
 
 ```bash
-cd /path/to/LYG_manhover_detection_workflow/model_deployment/rk3588/manhole_cover_detection
+cd model_deployment/rk3588/manhole_cover_detection
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
+cmake --install build
 file rknpu2/lib/librknnrt.so
 ```
 
 Runtime 应为 ARM aarch64。若使用交叉编译器，可通过 CMake toolchain 文件指定编译器和 sysroot。
+产物：`bin/demo` 和 `bin/libmanhole_plugin.so`。
 
-### 4.3 输入视频推理和保存
+### 4.3 离线视频推理和保存
+
+把 `config/streams_config.json` 的 `input_source` 指向本地视频后：
 
 ```bash
-./bin/debug_demo \
-  --model models/manhole-cover-yolo11s-production.rknn \
-  --input input.mp4 \
-  --output output_manhole.mp4 \
-  --conf-thres 0.25 \
-  --iou-thres 0.45 \
-  --max-det 100
+cd bin
+export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
+./demo -c ../config/streams_config.json -m offline -o /tmp/output_manhole.mp4
 ```
 
-参数依次为模型、输入视频、输出视频、置信度阈值、NMS IoU 阈值和最大检测数。程序逐帧读取视频、RGB letterbox、RKNN 推理、解码/NMS、绘制检测框并保存输出视频。
+程序逐帧读取视频，插件完成 RGB letterbox、RKNN 推理、解码/NMS，CPU 绘制检测框并
+保存输出视频（OpenCV `mp4v`）。阈值由配置 `conf_thres/nms_thres`（或 `models[]` 的
+`conf_threshold/nms_threshold`）下发。
 
-后续接入告警、推流或插件时，在 `src/main.cpp` 中 `detector.infer()` 返回后使用 `frame` 和 `detections`；先保持离线视频链路稳定，再替换输入输出模块。
+后续接入告警、推流或插件时，在 `VideoStream::runLoop()` 的 `processFrame` 返回后
+使用 `AI_RESULT_T`；先保持离线视频链路稳定，再替换输入输出模块。
 
 ## 5. SSH-TUNNEL 实时推流部署
 
@@ -266,18 +282,18 @@ ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8556/src_in
 
 ### 5.3 启动 RK3588 AI 流
 
+把 `config/streams_config.json` 的 `input_source` 改为 `rtsp://127.0.0.1:8556/src_in`
+后：
+
 ```bash
-./bin/debug_demo \
-  --model models/manhole-cover-yolo11s-production.rknn \
-  --input rtsp://127.0.0.1:8556/src_in \
-  --output rtsp://127.0.0.1:8554/ai_out \
-  --conf-thres 0.25 \
-  --iou-thres 0.45 \
-  --max-det 100
+cd bin
+export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
+./demo -c ../config/streams_config.json -m stream
 ```
 
-在线输出使用 RK3588 板端 `h264_rkmpp` 编码器。主机查看或录制必须使用 SSH
-映射端口 `8557`：
+在线输出使用 RK3588 板端 `h264_rkmpp` 编码器，默认发布到
+`rtsp://127.0.0.1:8554/ai_out`（可在配置 `rtsp_output_url` 覆盖）。主机查看或录制
+必须使用 SSH 映射端口 `8557`：
 
 ```bash
 ffplay -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out

@@ -1,0 +1,36 @@
+{
+  "streams": [
+    {
+      "stream_id": 1,
+      "input_source": "/root/kaohe_6076/test.mp4",
+      "input_codec": "h264",
+      "conf_thres": 0.25,
+      "nms_thres": 0.45,
+      "output_width": 1920,
+      "output_height": 1080,
+      "fps": 30,
+      "enable_ai": true,
+      "ai_output_width": 640,
+      "ai_output_height": 640,
+      "ai_fps": 15,
+      "enable_raw_stream": false,
+      "plugin": "./libmanhole_plugin.so",
+      "models": [
+        {
+          "name": "manhole_cover",
+          "path": "../models/manhole-cover-yolo11s-production.rknn",
+          "conf_threshold": 0.25,
+          "nms_threshold": 0.45
+        }
+      ]
+    }
+  ],
+  "global_settings": {
+    "mediamtx_host": "127.0.0.1",
+    "mediamtx_port": "8000",
+    "default_model": "manhole_cover",
+    "default_conf_thres": 0.25,
+    "default_nms_thres": 0.45,
+    "enable_raw_stream": false
+  }
+}

@@ -1,216 +1,180 @@
-#include "rknpu_manhole.hpp"
+// RK3588 井盖检测 demo 主程序。
+// 与 AX650 的 src/main.cpp 同构：-c/-m offline|stream/-o/--mediamtx*/--enable-raw 参数、
+// ConfigService(/dev/shm/ai_config.json) + VideoStreamManager、日志前缀一致。
+// 仅底层不同：OpenCV 解码 + FFmpeg h264_rkmpp 输出，不依赖 AX 硬件流水线。
 
-#include <opencv2/videoio.hpp>
-#include <opencv2/imgproc.hpp>
-
-#include <chrono>
+#include <signal.h>
+#include <unistd.h>
 #include <cstdio>
-#include <cstdlib>
-#include <cmath>
-#include <iomanip>
-#include <iostream>
-#include <sstream>
-#include <stdexcept>
+#include <cstring>
+#include <string>
+#include <set>
 
-namespace {
+#include "manager/video_stream_manager.h"
+#include "manager/config_service.h"
+#include "../utilities/sample_log.h"
 
-void draw_detections(cv::Mat &frame, const std::vector<Detection> &detections) {
-    const cv::Scalar colors[] = {
-        {46, 204, 113}, {52, 73, 235}, {0, 165, 255}, {0, 0, 255}, {255, 191, 0}
-    };
-    for (const auto &det : detections) {
-        const cv::Scalar color = colors[det.class_id % 5];
-        cv::rectangle(frame, det.box, color, 2);
-        std::ostringstream label;
-        label << class_name(det.class_id) << " " << std::fixed << std::setprecision(2)
-              << det.confidence;
-        int baseline = 0;
-        const cv::Size text_size = cv::getTextSize(label.str(), cv::FONT_HERSHEY_SIMPLEX,
-                                                   0.55, 1, &baseline);
-        const int x = std::max(0, det.box.x);
-        const int y = std::max(text_size.height + 4, det.box.y);
-        cv::rectangle(frame, cv::Rect(x, y - text_size.height - 6,
-                                      text_size.width + 6, text_size.height + 6), color, -1);
-        cv::putText(frame, label.str(), cv::Point(x + 3, y - 4),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(255, 255, 255), 1,
-                    cv::LINE_AA);
-    }
+extern "C" volatile int gLoopExit = 0;
+
+extern "C" void __sigExit(int iSigNo) {
+    ALOGN("Catch signal %d, exiting...", iSigNo);
+    gLoopExit = 1;
 }
 
-bool is_rtsp_url(const std::string &value) {
-    return value.rfind("rtsp://", 0) == 0 || value.rfind("rtsps://", 0) == 0;
+static void print_help(const char* program) {
+    printf("Usage: %s [-c config.json] -m <offline|stream> [-o output.mp4]\n", program);
+    printf("  -c <file>           streams configuration JSON (default: config/streams_config.json)\n");
+    printf("  -m <offline|stream> offline writes a boxed MP4; stream pushes h264_rkmpp to RTSP/MediaMTX\n");
+    printf("  -o <file>           offline output MP4 path (offline only)\n");
+    printf("  --mediamtx IP:PORT  MediaMTX endpoint (compat; RTSP output is configured in streams_config.json)\n");
+    printf("  --mediamtx-host H   MediaMTX host (compat)\n");
+    printf("  --mediamtx-port P   MediaMTX port (compat)\n");
+    printf("  --enable-raw        enable raw stream (not supported on RK3588 yet)\n");
+    printf("  -h                  show this help\n");
+    printf("Input source is configured in streams_config.json (local file or RTSP URL).\n");
 }
 
-bool open_input_video(cv::VideoCapture &capture, const std::string &input_path) {
-    if (!is_rtsp_url(input_path)) {
-        return capture.open(input_path);
-    }
+int main(int argc, char* argv[]) {
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, __sigExit);
+    signal(SIGTERM, __sigExit);
 
-    // SSH port forwarding carries TCP only; prevent FFmpeg from opening UDP RTP ports.
-    setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
-    return capture.open(input_path, cv::CAP_FFMPEG);
-}
+    int ret = 0;
+    std::string runMode = "stream";
+    std::string offlineOutputPath;
 
-std::string shell_quote(const std::string &value) {
-    std::string quoted = "'";
-    for (char character : value) {
-        if (character == '\'') {
-            quoted += "'\\''";
-        } else {
-            quoted += character;
+    // 命令行参数：MediaMTX 地址（优先级高于配置文件/环境变量，兼容 ax650 CLI）
+    std::string mediamtx_host_cmd;
+    std::string mediamtx_port_cmd;
+    std::string mediamtx_endpoint_cmd;  // --mediamtx IP:PORT 格式
+    bool cli_enable_raw_all = false;
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_help(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
+            runMode = argv[++i];
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            offlineOutputPath = argv[++i];
+        } else if (strcmp(argv[i], "--mediamtx-host") == 0 && i + 1 < argc) {
+            mediamtx_host_cmd = argv[++i];
+        } else if (strcmp(argv[i], "--mediamtx-port") == 0 && i + 1 < argc) {
+            mediamtx_port_cmd = argv[++i];
+        } else if (strcmp(argv[i], "--mediamtx") == 0 && i + 1 < argc) {
+            mediamtx_endpoint_cmd = argv[++i];
+        } else if (strcmp(argv[i], "--enable-raw") == 0) {
+            cli_enable_raw_all = true;
         }
     }
-    quoted += "'";
-    return quoted;
-}
 
-}  // namespace
+    if (runMode != "offline" && runMode != "stream") {
+        ALOGE("Invalid mode '%s'; expected offline or stream", runMode.c_str());
+        print_help(argv[0]);
+        return -1;
+    }
+    if (runMode == "offline" && offlineOutputPath.empty()) {
+        ALOGE("Offline mode requires -o <output.mp4>");
+        print_help(argv[0]);
+        return -1;
+    }
+    if (cli_enable_raw_all) {
+        ALOGW("[Main] --enable-raw is not supported on RK3588 yet, ignored");
+    }
 
-int main(int argc, char **argv) {
-    std::string model_path;
-    std::string input_path;
-    std::string output_path;
-    float conf_threshold = 0.25f;
-    float iou_threshold = 0.45f;
-    int max_det = 100;
+    // 组装 MediaMTX 端点（兼容 ax650：命令行 > 配置文件 > 环境变量）
+    std::string mediamtx_endpoint_for_config;
+    if (!mediamtx_endpoint_cmd.empty()) {
+        mediamtx_endpoint_for_config = mediamtx_endpoint_cmd;
+    } else if (!mediamtx_host_cmd.empty()) {
+        mediamtx_endpoint_for_config = mediamtx_host_cmd + ":" +
+            (mediamtx_port_cmd.empty() ? "8000" : mediamtx_port_cmd);
+    }
 
-    auto next_value = [&](int &index, const char *option) -> const char * {
-        if (index + 1 >= argc) {
-            throw std::invalid_argument(std::string("missing value for ") + option);
+    // 配置服务：监控 /dev/shm/ai_config.json 的热更新
+    ConfigService configService("/dev/shm/ai_config.json");
+    configService.startMonitoring();
+
+    VideoStreamManager streamManager(configService);
+
+    // 配置文件路径：-c 指定或默认
+    std::string streamsConfigPath;
+    bool useConfigFile = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+            streamsConfigPath = argv[i + 1];
+            useConfigFile = true;
+            break;
         }
-        return argv[++index];
-    };
+    }
+    if (!useConfigFile) {
+        streamsConfigPath = "config/streams_config.json";
+        ALOGN("[Main] Using default streams config: %s", streamsConfigPath.c_str());
+    }
 
-    try {
-        for (int i = 1; i < argc; ++i) {
-            const std::string option = argv[i];
-            if (option == "--model") {
-                model_path = next_value(i, "--model");
-            } else if (option == "--input") {
-                input_path = next_value(i, "--input");
-            } else if (option == "--output") {
-                output_path = next_value(i, "--output");
-            } else if (option == "--conf-thres") {
-                conf_threshold = std::stof(next_value(i, "--conf-thres"));
-            } else if (option == "--iou-thres") {
-                iou_threshold = std::stof(next_value(i, "--iou-thres"));
-            } else if (option == "--max-det") {
-                max_det = std::stoi(next_value(i, "--max-det"));
-            } else if (option == "--help" || option == "-h") {
-                std::cout << "usage: " << argv[0]
-                          << " --model model.rknn --input input.mp4 --output output.mp4"
-                          << " [--conf-thres 0.25] [--iou-thres 0.45] [--max-det 100]\n";
-                return 0;
-            } else {
-                throw std::invalid_argument("unknown option: " + option);
-            }
+    ALOGN("[Main] Loading streams from config file: %s", streamsConfigPath.c_str());
+    if (!streamManager.loadStreamsFromConfig(streamsConfigPath, mediamtx_endpoint_for_config,
+                                             runMode == "offline", offlineOutputPath)) {
+        ALOGE("[Main] Failed to load streams from config file");
+        ret = -1;
+        goto EXIT;
+    }
+
+    // 注册配置监听，动态响应配置变化
+    configService.registerConfigListener([&](const ConfigUpdate& update) {
+        streamManager.handleConfigUpdate(update);
+    });
+
+    // 启动所有流
+    ALOGN("Starting all streams...");
+    for (auto& stream : streamManager.getStreams()) {
+        ALOGN("Starting stream %d (inputSource=%s, enableAI=%d)...",
+              stream->getStreamId(), stream->getInputSource().c_str(),
+              stream->isAIEnabled() ? 1 : 0);
+        if (!stream->start()) {
+            ALOGE("Failed to start stream %d", stream->getStreamId());
         }
-    } catch (const std::exception &error) {
-        std::cerr << "argument error: " << error.what() << std::endl;
-        return 2;
     }
+    ALOGN("All streams started. Total streams: %zu", streamManager.getStreams().size());
 
-    if (model_path.empty() || input_path.empty() || output_path.empty() ||
-        conf_threshold < 0.0f || iou_threshold < 0.0f || max_det <= 0) {
-        std::cerr << "usage: " << argv[0]
-                  << " --model model.rknn --input input.mp4 --output output.mp4"
-                  << " [--conf-thres 0.25] [--iou-thres 0.45] [--max-det 100]\n";
-        return 2;
-    }
-
-    cv::VideoCapture capture;
-    if (is_rtsp_url(input_path)) {
-        std::cout << "rtsp_input_transport=tcp" << std::endl;
-    }
-    open_input_video(capture, input_path);
-    if (!capture.isOpened()) {
-        std::cerr << "cannot open input video: " << input_path << std::endl;
-        return 1;
-    }
-    const int width = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_WIDTH));
-    const int height = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_HEIGHT));
-    double fps = capture.get(cv::CAP_PROP_FPS);
-    if (!(fps > 0.0 && std::isfinite(fps))) {
-        fps = 25.0;
-    }
-
-    cv::VideoWriter writer;
-    FILE *stream_pipe = nullptr;
-    if (is_rtsp_url(output_path)) {
-        std::ostringstream command;
-        command << "ffmpeg -loglevel warning -f rawvideo -pix_fmt bgr24"
-                << " -s " << width << "x" << height
-                << " -r " << fps << " -i pipe:0 -an"
-                << " -c:v h264_rkmpp -pix_fmt yuv420p -f rtsp"
-                << " -rtsp_transport tcp " << shell_quote(output_path);
-        std::cout << "output_mode=rtsp command=" << command.str() << std::endl;
-        stream_pipe = popen(command.str().c_str(), "w");
-        if (!stream_pipe) {
-            std::cerr << "cannot start ffmpeg RTSP output: " << output_path << std::endl;
-            return 1;
+    // 在所有流启动后初始化 OSD 管理（对齐 ax650 调用顺序）
+    ALOGN("[Main] Initializing OSD for all AI streams...");
+    for (auto& stream : streamManager.getStreams()) {
+        if (stream->isAIEnabled()) {
+            streamManager.initializeOSDForAIStream(stream->getStreamId());
         }
-    } else {
-        writer.open(output_path, cv::VideoWriter::fourcc('m', 'p', '4', 'v'),
-                    fps, cv::Size(width, height));
-        if (!writer.isOpened()) {
-            std::cerr << "cannot open output video: " << output_path
-                      << "; check OpenCV video codec support" << std::endl;
-            return 1;
-        }
-        std::cout << "output_mode=file" << std::endl;
     }
 
-    ManholeRknn detector;
-    if (!detector.init(model_path)) {
-        return 1;
-    }
-    std::cout << "video=" << width << "x" << height << " fps=" << fps
-              << " model_input=" << detector.input_width() << "x"
-              << detector.input_height() << std::endl;
-
-    cv::Mat frame;
-    size_t frame_index = 0;
-    double inference_ms_sum = 0.0;
-    while (capture.read(frame)) {
-        const auto start = std::chrono::steady_clock::now();
-        std::vector<Detection> detections;
-        if (!detector.infer(frame, detections, conf_threshold, iou_threshold, max_det)) {
-            std::cerr << "inference failed at frame " << frame_index << std::endl;
-            return 1;
+    // 读取初始配置并应用
+    {
+        const std::string currentModel = configService.getCurrentModel();
+        ALOGN("[Main] Current model from config: %s", currentModel.c_str());
+        if (currentModel != "none" && !currentModel.empty()) {
+            ConfigUpdate initialUpdate;
+            initialUpdate.modelName = currentModel;
+            initialUpdate.modelPath = configService.getModelPath(currentModel);
+            initialUpdate.confThreshold = configService.getConfThreshold();
+            initialUpdate.nmsThreshold = configService.getNmsThreshold();
+            initialUpdate.valid = configService.isConfigValid();
+            initialUpdate.streamId = -1;  // 全局更新
+            streamManager.handleConfigUpdate(initialUpdate);
         }
-        const auto end = std::chrono::steady_clock::now();
-        const double inference_ms = std::chrono::duration<double, std::milli>(end - start).count();
-        inference_ms_sum += inference_ms;
-        draw_detections(frame, detections);
-        if (stream_pipe) {
-            if (!frame.isContinuous()) {
-                frame = frame.clone();
-            }
-            const size_t bytes = frame.total() * frame.elemSize();
-            if (fwrite(frame.data, 1, bytes, stream_pipe) != bytes) {
-                std::cerr << "ffmpeg RTSP output pipe closed at frame " << frame_index << std::endl;
-                pclose(stream_pipe);
-                return 1;
-            }
-            fflush(stream_pipe);
-        } else {
-            writer.write(frame);
-        }
+    }
 
-        std::cout << "frame=" << frame_index << " detections=" << detections.size()
-                  << " inference_ms=" << inference_ms << std::endl;
-        ++frame_index;
+    ALOGN("System Ready");
+    ALOGN("Input sources: %zu", streamManager.getStreams().size());
+    ALOGN("Config file: /dev/shm/ai_config.json");
+
+    while (!gLoopExit && !configService.isShutdownRequested()) {
+        if (runMode == "offline" && streamManager.allEnded()) {
+            ALOGN("[Main] Offline input completed");
+            break;
+        }
+        sleep(1);
     }
-    if (stream_pipe) {
-        pclose(stream_pipe);
-    } else {
-        writer.release();
-    }
-    capture.release();
-    std::cout << "saved " << frame_index << " frames to " << output_path;
-    if (frame_index > 0) {
-        std::cout << ", average inference_ms=" << inference_ms_sum / frame_index;
-    }
-    std::cout << std::endl;
-    return 0;
+
+EXIT:
+    configService.stopMonitoring();
+    ALOGN("App Exit");
+    return ret;
 }

@@ -61,7 +61,57 @@ cp model_convert/ax650/output/yolo11s-manhole-detection/yolo11s-manhole-detectio
 SDK-GEN `model.bin`。它复用了原 device_side 主工程的完整链路：ConfigService、
 VideoStreamManager、VideoDemux、IVPS/OSD 和 VENC/RTP，本仓库只编译井盖插件和主程序。
 
-核心链路：
+### 2.1 数据流总览（主码流 + AI 流）
+
+```text
+输入 RTSP / 本地 H.264
+   │
+   ▼
+VideoDemux（ffmpeg 解封装，AVCC→AnnexB）
+   │  latest-frame 缓冲 + 每源专属 worker
+   ▼
+VDEC（硬件解码 H.264 → NV12；同一输入源共享一个 VDEC 组）
+   │
+   ├──────────────────────────────┬──────────────────────────────┐
+   ▼                              ▼                              ▼
+【主码流：输出流】            【AI 流：推理流】               【raw 流（可选）】
+ IVPS 1920×1080                IVPS 640×640                   IVPS 1920×1080
+ n_osd_rgn=1（挂 OSD 区域）    n_fifo_count=1（回调）           enableAI=false
+ po_mediamtx_h264              po_buff_nv12                    （无 OSD，
+ （离线: po_venc_h264）        output_func=aiInferenceCallback   端云比对用）
+   │                              │ 复制帧后立即返回（不阻塞 IVPS 线程）
+   │                              ▼
+   │                          AIWorker（每 AI 流一个固定线程）
+   │                              │ InferenceManager::run（单/并行/串行 ROI）
+   │                              ▼
+   │                          插件 Inference()：
+   │                            NV12→RGB letterbox(114)
+   │                            → AX_ENGINE_RunSync
+   │                            → output0 [1,9,8400] 解码 + 分类别 NMS
+   │                            → AI_RESULT_T（归一化坐标）
+   │                              │
+   │                              ▼
+   │                      deliverWorkerInferenceResult
+   │                              │ updateAIResult(aiStreamId, &result)
+   │                              ▼
+   │                      OSDAssociatedModel.latestResult
+   │                              │ osdUpdateThread 唤醒
+   │                              ▼
+   │                      DefaultOSDRenderer.render
+   │                              │ AX_IVPS_RGN_Update(主码流 region)
+   │                              ▼
+   │◄──────── 主码流 IVPS 硬件合成检测框（编码前零拷贝）──────────────┘
+   ▼
+VENC H.264 ──► RTP pusher（UDP/RTP）──► MediaMTX
+                                           │
+                             主机经 SSH -L 8557 查看
+```
+
+要点：主码流与 AI 流是两条独立硬件流水线（共享 VDEC 组、独立 IVPS 组）；AI 结果经
+OSD 管理线程（`OSDAssociatedModel`）+ `AX_IVPS_RGN_Update` **跨流叠加**到主码流
+IVPS 的 OSD region，在编码前由硬件完成画框合成。
+
+### 2.2 核心链路
 
 ```text
 src/main.cpp

@@ -1,7 +1,9 @@
 # RK3588 AI 流
 
 本文档在 `FLOW1.md` 的主机 MediaMTX 和输入推流基础上，使用 RK3588 板端
-C++/RKNPU2 完成完整的 AI 流：
+C++/RKNPU2 完成完整的 AI 流。工程与 AX650 板端工程同构：配置驱动
+（`config/streams_config.json` + `/dev/shm/ai_config.json` 热更新）、dlopen 插件 ABI
+（`libmanhole_plugin.so` + `IAIModel`）、多流管理，`-c/-m offline|stream/-o` 命令行。
 
 ```text
 主机 test.mp4
@@ -12,11 +14,11 @@ C++/RKNPU2 完成完整的 AI 流：
     |
     | RTSP/TCP
     v
-RK3588 OpenCV VideoCapture
+RK3588 demo（-m stream，OpenCV VideoCapture）
     |
-    | BGR 帧 -> RGB letterbox -> RKNPU2 RKNN 推理
+    | BGR 帧 -> AI 插件（RGB letterbox -> RKNPU2 RKNN 推理）
     v
-绘制检测框、类别和置信度
+AI_RESULT_T -> CPU 画框（类别、置信度）
     |
     | BGR rawvideo 管道 -> FFmpeg h264_rkmpp
     v
@@ -139,32 +141,66 @@ models/manhole-cover-yolo11s-production.rknn
 
 然后把 FP 模型复制到部署目录，再复制整个部署目录到 RK3588。
 
-## 5. C++ 程序改造点
+## 5. 程序说明（与 AX650 同构）
 
-### 5.1 输入从 MP4 扩展为 RTSP
-
-`src/main.cpp` 使用：
-
-```cpp
-cv::VideoCapture capture(input_path);
-```
-
-因此 `--input` 可以是本地文件，也可以是 RTSP URL。AI 流运行时使用：
+### 5.1 架构
 
 ```text
-    --input rtsp://127.0.0.1:8556/src_in
+src/main.cpp
+   -c/-m offline|stream/-o/--mediamtx*/--enable-raw 参数解析，加载 streams_config.json，
+   ConfigService + VideoStreamManager
+
+src/manager/config_service.cpp
+   监控 /dev/shm/ai_config.json 热更新，解析 streams/models/global_settings 配置
+
+src/manager/video_stream_manager.cpp
+   根据配置创建多路 VideoStream（输入来自配置的 input_source）
+
+src/manager/video_stream.cpp
+   OpenCV VideoCapture 解码 -> 推理（单模型或 InferenceManager 多模型调度）
+   -> OSDRenderer 画框 -> OpenCV MP4（offline）或 FFmpeg h264_rkmpp RTSP（stream）
+
+src/manager/ai_processor.cpp
+   dlopen 插件（配置 plugin 字段或默认 ./libmanhole_plugin.so），
+   调用 CreateAIModel/Init/Inference/Deinit，阈值透传环境变量
+
+src/manager/inference_engine.cpp / inference_manager.cpp
+   单模型引擎 + Single/Parallel/Serial(ROI) 多模型调度（与 ax650 同语义）
+
+src/manager/osd_renderer.cpp / src/osd_renderer_interface.cpp
+   OSDRenderer + IOSDRenderer/DefaultOSDRenderer（绘制到 BGR 帧）
+
+include/ai_interface.h
+   平台无关插件 ABI：IAIModel / AI_RESULT_T / AI_FRAME_T
+
+plugins/model_manhole_cover.cpp -> libmanhole_plugin.so
+   RKNN 推理 + RGB letterbox(114) + output0 解码 + 分类别 NMS + AI_RESULT_T
 ```
 
-程序保持逐帧读取：
+### 5.2 参数全部使用选项名
 
-```cpp
-while (capture.read(frame)) {
-    detector.infer(frame, detections, conf_threshold, iou_threshold, max_det);
-    draw_detections(frame, detections);
-}
+```text
+-c <file>       streams 配置 JSON（默认 config/streams_config.json）
+-m <offline|stream>   运行模式
+-o <file>       offline 输出 MP4 路径（offline only）
+--mediamtx IP:PORT       MediaMTX 端点（兼容字段，RTSP 输出在配置 rtsp 相关字段）
+--mediamtx-host H / --mediamtx-port P  兼容字段
+--enable-raw            端云比对 raw 流（RK3588 暂不支持，忽略）
+-h              帮助
 ```
 
-### 5.2 输入预处理必须与验证一致
+输入源不通过位置参数传入，一律在 `streams_config.json` 的 `input_source` 里配置，
+可以是本地文件路径或 RTSP URL。`streams_config.json` 字段与 AX650 完全一致。
+
+### 5.3 阈值透传
+
+配置中每路流的 `conf_thres` / `nms_thres`，以及 `models[]` 里的
+`conf_threshold` / `nms_threshold`，由 `AIProcessor::applyModelParamsToEnv()` 写入
+环境变量 `MANHOLE_CONF_THRESH` / `MANHOLE_NMS_THRESH`（并回退 `MODEL_*`）。
+插件 `Init()` 读取这两个环境变量（默认 0.25 / 0.45），因此配置阈值会真正影响
+RKNN 后处理，而不是只显示在配置中。
+
+### 5.4 输入预处理必须与验证一致
 
 每一帧进入 RKNPU2 前执行：
 
@@ -177,52 +213,32 @@ while (capture.read(frame)) {
 检测框从 640x640 letterbox 坐标减去 padding，再除以缩放比例，恢复到原始
 视频尺寸。
 
-### 5.3 RKNPU2 推理和后处理
-
-初始化阶段查询 input/output tensor 属性，并确认输出是 9 个通道和 8400 个
-候选框。推理阶段调用：
-
-```cpp
-rknn_inputs_set(context_, 1, &input);
-rknn_run(context_, nullptr);
-output.want_float = 1;
-rknn_outputs_get(context_, 1, &output, nullptr);
-```
-
-后处理选择每个候选框的最高类别分数，执行置信度过滤和按类别 NMS，然后把
-结果转换成原始视频坐标。
-
-### 5.4 绘制 AI 结果
-
-`draw_detections()` 在推流之前调用：
-
-```cpp
-draw_detections(frame, detections);
-```
-
-它在 BGR 帧上绘制矩形框、类别名和置信度。必须确认推流写入的是绘制后的
-`frame`，不能把原始帧写入 FFmpeg 管道。
-
 ### 5.5 输出分支
 
-当 `--output` 是本地文件时，使用 OpenCV `VideoWriter` 保存 MP4：
+offline 模式：OpenCV `VideoWriter`（`mp4v`）保存 MP4，路径由 `-o` 指定。
+
+stream 模式：程序启动 FFmpeg 子进程，把绘制后的 BGR 原始帧写入 stdin：
 
 ```text
---output output_manhole.mp4
-```
-
-当 `--output` 是 `rtsp://` 或 `rtsps://` URL 时，程序启动 FFmpeg 子进程，
-把绘制后的 BGR 原始帧写入 stdin：
-
-```text
-ffmpeg -f rawvideo -pix_fmt bgr24 -s WIDTHxHEIGHT -r FPS -i pipe:0 \
+ffmpeg -loglevel warning -f rawvideo -pix_fmt bgr24 -s WIDTHxHEIGHT -r FPS -i pipe:0 \
   -an -c:v h264_rkmpp -pix_fmt yuv420p -f rtsp \
   -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
 ```
 
-这里的 `-s`、`-r` 由输入视频实际属性生成。当前 AI 流默认不转发音频，
-因为程序只从 OpenCV 读取视频帧；如需音频，需要额外设计音视频同步和音频
-转发链路，不能仅在当前 BGR 管道中增加参数。
+这里的 `-s`、`-r` 由输入视频实际属性生成。输出 RTSP 地址默认
+`rtsp://127.0.0.1:8554/ai_out`，多路时自动加流号，也可在配置 `rtsp_output_url`
+覆盖。当前 AI 流默认不转发音频，因为程序只从 OpenCV 读取视频帧。
+
+### 5.6 推理和绘制顺序
+
+每一帧必须遵守：
+
+```text
+VideoCapture.read -> AIProcessor.processFrame（插件推理 -> AI_RESULT_T）
+    -> 检测框绘制在 BGR 帧上 -> 写入 VideoWriter 或 FFmpeg stdin
+```
+
+如果推理正确但查看的流没有检测框，先确认写入输出的是绘制后的帧。
 
 ## 6. 编译 RK3588 程序
 
@@ -248,11 +264,14 @@ rm -rf build
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOpenCV_DIR="$HOME/opt/opencv-dev/usr/lib/aarch64-linux-gnu/cmake/opencv4"
 ```
 
-编译：
+编译并安装：
 
 ```bash
 cmake --build build -j2
+cmake --install build
 ```
+
+产物：`bin/demo` 和 `bin/libmanhole_plugin.so`。
 
 如果 CMake 因为完整 OpenCV 配置文件引用不存在的可选模块失败，应使用当前
 仓库版本的 `CMakeLists.txt`。它只查找程序需要的 `core`、`imgproc` 和
@@ -260,25 +279,40 @@ cmake --build build -j2
 
 ## 7. 启动完整 AI 流
 
-确认主机上的 MediaMTX 和 `src_in` 推流仍在运行后，在 RK3588 执行：
+确认主机上的 MediaMTX 和 `src_in` 推流仍在运行后，把 `config/streams_config.json`
+的 `input_source` 改为：
+
+```text
+rtsp://127.0.0.1:8556/src_in
+```
+
+进入程序目录并设置运行库：
 
 ```bash
-./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input rtsp://127.0.0.1:8556/src_in --output rtsp://127.0.0.1:8554/ai_out --conf-thres 0.25 --iou-thres 0.45 --max-det 100
+cd bin
+export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
+```
+
+启动在线 AI 流：
+
+```bash
+./demo -c ../config/streams_config.json -m stream
 ```
 
 正常启动时应看到：
 
 ```text
-input: ...
-output: ...
-video=1138x720 fps=...
-output_mode=rtsp command=ffmpeg ... h264_rkmpp ... rtsp://127.0.0.1:8554/ai_out
-output decode: ...
-frame=0 detections=... inference_ms=...
+[Main] Loading streams from config file: ../config/streams_config.json
+[AIProcessor] Loading plugin: ./libmanhole_plugin.so
+[AIProcessor] Model initialized successfully
+[ManholeCover] Loading model: ...
+[ManholeCover] thresholds: conf=0.250 nms=0.450
+[VideoStream] Stream 1: output_mode=rtsp command=ffmpeg ... h264_rkmpp ... rtsp://127.0.0.1:8554/ai_out
+output decode: floats=... channels=9 anchors=8400 layout=[channels,anchors]
+[ManholeCover] detections=... confidence: ...
 ```
 
-程序会逐帧打印检测数量和推理耗时。`detections` 大于 0 时，框已经绘制到
-发送给 FFmpeg 的视频帧上。
+`detections` 大于 0 时，框已经绘制到发送给 FFmpeg 的视频帧上。
 
 ## 8. 主机查看 AI 流
 
@@ -317,37 +351,38 @@ ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8557/ai_out -c copy ai_result.
 
 按 `Ctrl+C` 停止录制。录制终端停止不会停止 RK3588 推理程序。
 
-## 9. 参数说明
+## 9. 离线验证
 
-所有运行参数必须使用 `--`：
+把 `config/streams_config.json` 的 `input_source` 指向本地视频文件：
+
+```bash
+cd bin
+export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
+./demo -c ../config/streams_config.json -m offline -o /tmp/output_manhole.mp4
+```
+
+预期日志：
 
 ```text
---model       RKNN 模型路径
---input       本地视频或输入 RTSP URL
---output      本地 MP4 路径或输出 RTSP URL
---conf-thres  置信度阈值，默认 0.25
---iou-thres   NMS IoU 阈值，默认 0.45
---max-det     单帧最多保留的检测框数量，默认 100
+[Main] Loading streams from config file: ../config/streams_config.json
+[ManholeCover] Loading model: ...
+[ManholeCover] thresholds: conf=0.250 nms=0.450
+[VideoStream] Stream 1: output_mode=file /tmp/output_manhole.mp4
+[Main] Offline input completed
 ```
 
-离线验证：
+检查结果文件：
 
 ```bash
-./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input test.mp4 --output output_manhole.mp4 --conf-thres 0.25 --iou-thres 0.45 --max-det 100
-```
-
-实时 AI 流：
-
-```bash
-./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input rtsp://127.0.0.1:8556/src_in --output rtsp://127.0.0.1:8554/ai_out --conf-thres 0.25 --iou-thres 0.45 --max-det 100
+ffprobe -v error -show_entries stream=codec_name,width,height -of default=noprint_wrappers=1 /tmp/output_manhole.mp4
 ```
 
 ## 10. 排错顺序
 
 ### 10.1 没有 `output_mode=rtsp`
 
-确认 `--output` 是完整的 `rtsp://...` URL，并且使用的是更新后的
-`src/main.cpp` 重新编译出的程序。
+确认 `-m stream` 模式，并确认配置的 `input_source` 已改为 RTSP URL；确认使用
+更新后的 `src/main.cpp` 重新编译出的 `bin/demo`。
 
 ### 10.2 FFmpeg 管道立即退出
 
@@ -359,7 +394,7 @@ ffmpeg -encoders | grep h264_rkmpp
 
 如果没有输出，当前 FFmpeg 不能执行文档中的硬件编码命令。先恢复板端
 Rockchip multimedia FFmpeg，或明确选择板端实际存在的 H.264 编码器后再修改
-`src/main.cpp`。
+`src/manager/video_stream.cpp`。
 
 ### 10.3 `ai_out` 没有视频
 
@@ -374,7 +409,7 @@ ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out
 ```
 
 ```bash
-ps aux | grep debug_demo
+ps aux | grep demo
 ```
 
 输入流正常但输出为空时，查看 RK3588 终端中的 FFmpeg warning 和
@@ -385,9 +420,8 @@ ps aux | grep debug_demo
 检查 RK3588 终端：
 
 ```text
-output: ...
 output decode: ...
-frame=... detections=...
+[ManholeCover] detections=... confidence: ...
 ```
 
 如果 `sample_scores` 全部为 0，使用 FP RKNN 替换当前 INT8 模型；如果
@@ -400,14 +434,20 @@ frame=... detections=...
 `rtsp://127.0.0.1:8556/src_in`，输出使用
 `rtsp://127.0.0.1:8554/ai_out`；不要使用主机局域网 IP。
 
+### 10.6 找不到插件
+
+默认插件路径是当前目录下的 `./libmanhole_plugin.so`（从 `bin/` 启动）。如果不在
+当前目录，在配置的 `plugin` 字段（stream 级或 `models[]` 级）里显式写完整路径。
+
 ## 11. 验收标准
 
 完成以下检查后，才算 RK3588 AI 流跑通：
 
 ```text
 [ ] RK3588 可以 ffprobe 读取 src_in
-[ ] C++ 程序成功加载 FP RKNN
-[ ] 每帧出现 inference_ms 日志
+[ ] demo 成功加载 FP RKNN 和 libmanhole_plugin.so
+[ ] 离线模式生成 output_manhole.mp4 且能看到检测框
+[ ] 每帧出现 [ManholeCover] detections 日志
 [ ] 输出 FFmpeg 使用 h264_rkmpp 且没有立即退出
 [ ] MediaMTX 中出现 ai_out
 [ ] 主机 ffplay 可以看到 ai_out

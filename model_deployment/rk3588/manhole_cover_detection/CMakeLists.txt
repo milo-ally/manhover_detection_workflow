@@ -66,22 +66,48 @@ set(OpenCV_LIBS
 message(STATUS "OpenCV include: ${OPENCV_INCLUDE_DIR}")
 message(STATUS "OpenCV libraries: ${OpenCV_LIBS}")
 
-add_executable(debug_demo
-    plugins/model_manhole_cover.cpp
-    src/main.cpp
-)
-target_include_directories(debug_demo PRIVATE
+# 井盖检测插件（主程序 dlopen 加载，内部使用 RKNPU2）
+add_library(manhole_plugin SHARED plugins/model_manhole_cover.cpp)
+target_include_directories(manhole_plugin PRIVATE
     include
     "${RKNPU2_DIR}/include"
     ${OpenCV_INCLUDE_DIRS}
 )
-target_link_libraries(debug_demo PRIVATE
+target_link_libraries(manhole_plugin PRIVATE
     "${RKNPU2_DIR}/lib/librknnrt.so"
     ${OpenCV_LIBS}
     dl
     pthread
 )
-set_target_properties(debug_demo PROPERTIES
+set_target_properties(manhole_plugin PROPERTIES
     BUILD_RPATH "$ORIGIN/../rknpu2/lib"
     INSTALL_RPATH "$ORIGIN/../rknpu2/lib"
 )
+
+# 主程序（配置服务 + 多流管理 + 插件加载 + OSD/推理调度）
+add_executable(demo
+    src/main.cpp
+    src/osd_renderer_interface.cpp
+    src/manager/config_service.cpp
+    src/manager/ai_processor.cpp
+    src/manager/video_stream.cpp
+    src/manager/video_stream_manager.cpp
+    src/manager/inference_engine.cpp
+    src/manager/inference_manager.cpp
+    src/manager/osd_renderer.cpp
+)
+target_include_directories(demo PRIVATE
+    include
+    include/manager
+    utilities
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(demo PRIVATE
+    ${OpenCV_LIBS}
+    dl
+    pthread
+    m
+)
+
+install(TARGETS demo DESTINATION bin)
+install(TARGETS manhole_plugin DESTINATION bin)
