@@ -4,10 +4,14 @@
 #include <cstring>
 #include <cstdio>
 #include <ctime>
+#include <vector>
 
-#include <cstddef>
-#include <im2d.h>
-#include <rga.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
+// RGA/OpenCV 2D（对应 AX650 IVPS）。
+// 注意：RGA 对虚拟地址 buffer 的约束较严（需对齐/特殊内存），在纯软件路径下先用
+// OpenCV 完成 NV12<->BGR 与缩放（稳定可靠），接口保持不变，后续可替换回 RGA 硬件路径。
 
 namespace {
 
@@ -286,44 +290,52 @@ void RkEncoder::deinit() {
 
 namespace rga_ops {
 
-static void rga_fail(const char* op, IM_STATUS st) {
-    fprintf(stderr, "[RkMedia] RGA %s failed st=%d\n", op, (int)st);
+// NV12 -> BGR24（OpenCV：YUV420 半平面 -> BGR）
+bool nv12ToBgr(const uint8_t* src, int w, int h, int stride, uint8_t* bgr) {
+    if (!src || !bgr || w <= 0 || h <= 0) return false;
+    cv::Mat nv12((h * 3) / 2, w, CV_8UC1, const_cast<uint8_t*>(src), stride);
+    cv::Mat out(h, w, CV_8UC3, bgr);
+    cv::cvtColor(nv12, out, cv::COLOR_YUV2BGR_NV12);
+    return true;
 }
 
+// BGR24 -> NV12（OpenCV：BGR -> I420 平面，再重排为 NV12 半平面；stride 为 Y 行字节数）
+bool bgrToNv12(const uint8_t* bgr, int w, int h, uint8_t* nv12, int stride) {
+    if (!bgr || !nv12 || w <= 0 || h <= 0) return false;
+    cv::Mat b(h, w, CV_8UC3, const_cast<uint8_t*>(bgr));
+    cv::Mat i420;
+    cv::cvtColor(b, i420, cv::COLOR_BGR2YUV_I420);
+    // Y 平面
+    memcpy(nv12, i420.data, static_cast<size_t>(w) * h);
+    // UV 平面：I420 是 U、V 分开平面，NV12 是 U/V 交错半平面
+    const uint8_t* u = i420.data + static_cast<size_t>(w) * h;
+    const uint8_t* v = u + static_cast<size_t>(w) * h / 4;
+    uint8_t* uv = nv12 + static_cast<size_t>(stride) * h;
+    const int halfW = w / 2;
+    const int halfH = h / 2;
+    for (int row = 0; row < halfH; ++row) {
+        const uint8_t* ur = u + static_cast<size_t>(row) * halfW;
+        const uint8_t* vr = v + static_cast<size_t>(row) * halfW;
+        uint8_t* ov = uv + static_cast<size_t>(row) * stride;
+        for (int col = 0; col < halfW; ++col) {
+            ov[col * 2] = ur[col];
+            ov[col * 2 + 1] = vr[col];
+        }
+    }
+    return true;
+}
+
+// NV12 -> NV12 缩放（OpenCV：NV12->BGR->resize->BGR->NV12）
 bool resizeNv12(const uint8_t* src, int sw, int sh, int sstride,
                 uint8_t* dst, int dw, int dh, int dstride) {
     if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return false;
-    // RGA stride 为像素：wstride=行宽(像素)，hstride=行数(=高度)
-    rga_buffer_t s = wrapbuffer_virtualaddr(const_cast<uint8_t*>(src), sw, sh,
-                                            sstride, sh, RK_FORMAT_YCbCr_420_SP);
-    rga_buffer_t d = wrapbuffer_virtualaddr(dst, dw, dh,
-                                            dstride, dh, RK_FORMAT_YCbCr_420_SP);
-    IM_STATUS st = imresize(s, d, 0, 0, INTER_LINEAR, 1);
-    if (st != IM_STATUS_SUCCESS) rga_fail("resizeNv12", st);
-    return st == IM_STATUS_SUCCESS;
-}
-
-bool nv12ToBgr(const uint8_t* src, int w, int h, int stride, uint8_t* bgr) {
-    if (!src || !bgr || w <= 0 || h <= 0) return false;
-    rga_buffer_t s = wrapbuffer_virtualaddr(const_cast<uint8_t*>(src), w, h,
-                                            stride, h, RK_FORMAT_YCbCr_420_SP);
-    // BGR888 的 wstride 是像素（=w），不是字节数！
-    rga_buffer_t d = wrapbuffer_virtualaddr(bgr, w, h, w, h, RK_FORMAT_BGR_888);
-    IM_STATUS st = imcvtcolor(s, d, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888,
-                              IM_COLOR_SPACE_DEFAULT, 1);
-    if (st != IM_STATUS_SUCCESS) rga_fail("nv12ToBgr", st);
-    return st == IM_STATUS_SUCCESS;
-}
-
-bool bgrToNv12(const uint8_t* bgr, int w, int h, uint8_t* nv12, int stride) {
-    if (!bgr || !nv12 || w <= 0 || h <= 0) return false;
-    rga_buffer_t s = wrapbuffer_virtualaddr(const_cast<uint8_t*>(bgr), w, h,
-                                            w, h, RK_FORMAT_BGR_888);
-    rga_buffer_t d = wrapbuffer_virtualaddr(nv12, w, h, stride, h, RK_FORMAT_YCbCr_420_SP);
-    IM_STATUS st = imcvtcolor(s, d, RK_FORMAT_BGR_888, RK_FORMAT_YCbCr_420_SP,
-                              IM_COLOR_SPACE_DEFAULT, 1);
-    if (st != IM_STATUS_SUCCESS) rga_fail("bgrToNv12", st);
-    return st == IM_STATUS_SUCCESS;
+    std::vector<uint8_t> bgrIn(static_cast<size_t>(sw) * sh * 3);
+    std::vector<uint8_t> bgrOut(static_cast<size_t>(dw) * dh * 3);
+    if (!nv12ToBgr(src, sw, sh, sstride, bgrIn.data())) return false;
+    cv::Mat in(sh, sw, CV_8UC3, bgrIn.data());
+    cv::Mat out(dh, dw, CV_8UC3, bgrOut.data());
+    cv::resize(in, out, cv::Size(dw, dh), 0, 0, cv::INTER_LINEAR);
+    return bgrToNv12(bgrOut.data(), dw, dh, dst, dstride);
 }
 
 }  // namespace rga_ops
