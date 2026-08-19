@@ -103,11 +103,29 @@ set(AVFORMAT_INCLUDE_DIR "")
 if(PKG_CONFIG_FOUND)
     pkg_check_modules(AVFORMAT_PC QUIET libavformat libavcodec libavutil)
     if(AVFORMAT_PC_FOUND)
-        # LIBRARIES 为共享链接参数；LIBRARIES_PRIVATE 为静态 .pc 的传递依赖（swresample/drm 等）
-        set(AV_LIBS ${AVFORMAT_PC_LIBRARIES} ${AVFORMAT_PC_LIBRARIES_PRIVATE})
+        # 共享库自带传递依赖（DT_NEEDED），只需链接 avformat/avcodec/avutil；
+        # 不要无条件带 LIBRARIES_PRIVATE（可能引入板端缺失的 X11 等）。
+        set(AV_LIBS ${AVFORMAT_PC_LIBRARIES})
+        # 仅当 pkg-config 明确指向静态库（名称含 .a）时才补 private 传递依赖
+        set(_static_pc OFF)
+        foreach(_l ${AVFORMAT_PC_LIBRARIES})
+            if(_l MATCHES "\\.a$")
+                set(_static_pc ON)
+            endif()
+        endforeach()
+        if(_static_pc)
+            list(APPEND AV_LIBS ${AVFORMAT_PC_LIBRARIES_PRIVATE})
+        endif()
         set(AVFORMAT_INCLUDE_DIR "${AVFORMAT_PC_INCLUDE_DIRS}")
         message(STATUS "FFmpeg via pkg-config: ${AV_LIBS}")
     endif()
+endif()
+
+# 板端 ffmpeg 的 .pc 可能没有 Cflags：include 路径回退到 find_path
+if(NOT AVFORMAT_INCLUDE_DIR)
+    find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h
+        PATHS /usr/include /usr/include/aarch64-linux-gnu
+    )
 endif()
 
 if(NOT AV_LIBS)
