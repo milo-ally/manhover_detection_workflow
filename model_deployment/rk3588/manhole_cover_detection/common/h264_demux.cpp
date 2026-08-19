@@ -3,7 +3,10 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavcodec/bsf.h>
 #include <libavutil/opt.h>
+#include <libavutil/error.h>
 }
+
+#include <cstdio>
 
 #include "h264_demux.h"
 
@@ -19,12 +22,17 @@ bool H264Demux::open(const std::string& url) {
     if (url.rfind("rtsp://", 0) == 0 || url.rfind("rtsps://", 0) == 0) {
         av_dict_set(&opts, "rtsp_transport", "tcp", 0);
     }
-    if (avformat_open_input(&fmt, url.c_str(), nullptr, &opts) != 0) {
-        av_dict_free(&opts);
+    const int openRet = avformat_open_input(&fmt, url.c_str(), nullptr, &opts);
+    av_dict_free(&opts);
+    if (openRet != 0) {
+        char errbuf[128] = {0};
+        av_strerror(openRet, errbuf, sizeof(errbuf));
+        fprintf(stderr, "[H264Demux] avformat_open_input failed: %s (%s)\n",
+                url.c_str(), errbuf);
         return false;
     }
-    av_dict_free(&opts);
     if (avformat_find_stream_info(fmt, nullptr) < 0) {
+        fprintf(stderr, "[H264Demux] avformat_find_stream_info failed: %s\n", url.c_str());
         avformat_close_input(&fmt);
         return false;
     }
@@ -38,6 +46,19 @@ bool H264Demux::open(const std::string& url) {
         }
     }
     if (streamIdx_ < 0) {
+        // 输出流信息，便于排查（常见：输入是 H.265，而本工程只支持 H.264）
+        for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+            const AVCodecParameters* par = fmt->streams[i]->codecpar;
+            if (!par) continue;
+            fprintf(stderr, "[H264Demux] stream[%u] type=%d codec_id=%d (%s)\n",
+                    i, par->codec_type, par->codec_id,
+                    par->codec_type == AVMEDIA_TYPE_VIDEO ? "video" : "other");
+        }
+        fprintf(stderr,
+                "[H264Demux] no H.264 video stream found in %s. "
+                "This project supports H.264 input only; convert first, e.g.:\n"
+                "  ffmpeg -i <input> -c:v libx264 -pix_fmt yuv420p <input_h264>.mp4\n",
+                url.c_str());
         avformat_close_input(&fmt);
         return false;
     }
