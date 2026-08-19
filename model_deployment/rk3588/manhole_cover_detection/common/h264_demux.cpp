@@ -65,15 +65,20 @@ bool H264Demux::open(const std::string& url) {
 
     // 统一转 AnnexB（RTSP 已为 AnnexB，mp4 源会转换；对 AnnexB 输入为透传）
     const AVBitStreamFilter* bsf = av_bsf_get_by_name("h264_mp4toannexb");
-    if (bsf) {
+    if (!bsf) {
+        fprintf(stderr, "[H264Demux] WARNING: h264_mp4toannexb bsf not found, "
+                "packets will be sent as-is (MP4 源可能是 AVCC，MPP 可能解不出)\n");
+    } else {
         AVBSFContext* bsfCtx = nullptr;
         if (av_bsf_alloc(bsf, &bsfCtx) == 0) {
             if (avcodec_parameters_copy(bsfCtx->par_in,
                                         fmt->streams[streamIdx_]->codecpar) == 0 &&
                 av_bsf_init(bsfCtx) == 0) {
                 bsfCtx_ = bsfCtx;
+                fprintf(stderr, "[H264Demux] h264_mp4toannexb bsf initialized\n");
             } else {
                 av_bsf_free(&bsfCtx);
+                fprintf(stderr, "[H264Demux] WARNING: bsf init failed, packets as-is\n");
             }
         }
     }
@@ -120,11 +125,13 @@ bool H264Demux::readOnce() {
                         break;
                     }
                     delivered = true;
+                    deliveredCount_++;
                     av_packet_unref(pkt);
                 }
             }
         } else {
             if (cb_) delivered = cb_(pkt->data, pkt->size);
+            if (delivered) deliveredCount_++;
         }
     }
     av_packet_free(&pkt);

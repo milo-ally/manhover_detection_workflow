@@ -52,7 +52,10 @@ bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
     mpp_packet_init(&packet, const_cast<uint8_t*>(data), size);
     MPP_RET ret = mpi_of(mpi_)->decode_put_packet(ctx_of(ctx_), packet);
     mpp_packet_deinit(&packet);
-    if (ret != MPP_OK) return false;
+    if (ret != MPP_OK) {
+        fprintf(stderr, "[RkMedia] decode_put_packet failed ret=%d\n", ret);
+        return false;
+    }
     return drainFrames();
 }
 
@@ -66,6 +69,11 @@ bool RkDecoder::drainFrames() {
         const int h = static_cast<int>(mpp_frame_get_height(frame));
         const int hstride = static_cast<int>(mpp_frame_get_hor_stride(frame));
         MppBuffer buf = mpp_frame_get_buffer(frame);
+        static int frameLogCount = 0;
+        if (frameLogCount++ < 3 || (frameLogCount % 300) == 0) {
+            fprintf(stderr, "[RkMedia] dec frame %d: %dx%d hstride=%d\n",
+                    frameLogCount, w, h, hstride);
+        }
         if (buf && w > 0 && h > 0 && hstride > 0) {
             const size_t ysz = static_cast<size_t>(hstride) * h;
             outBuf_.resize(ysz + ysz / 2);

@@ -36,6 +36,8 @@ private:
     PacketCallback cb_;
     bool eof_ = false;
     bool opened_ = false;
+    unsigned long long deliveredCount_ = 0;   // 已送达视频包计数（诊断）
+    unsigned long long readCalls_ = 0;        // readOnce 调用次数（诊断）
 };
 
 #endif  // H264_DEMUX_H
