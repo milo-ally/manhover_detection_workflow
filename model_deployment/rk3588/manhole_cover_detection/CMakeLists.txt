@@ -117,15 +117,15 @@ if(NOT AV_LIBS)
     # 优先共享运行库（带版本号 .so.XX），避免静态 .a 的传递依赖链
     find_library(AVFORMAT_LIB
         NAMES libavformat.so.61 libavformat.so.60 libavformat.so.59 libavformat.so.58 libavformat
-        PATHS /usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib
+        PATHS /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu /usr/lib /lib /usr/local/lib
     )
     find_library(AVCODEC_LIB
         NAMES libavcodec.so.61 libavcodec.so.60 libavcodec.so.59 libavcodec.so.58 libavcodec
-        PATHS /usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib
+        PATHS /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu /usr/lib /lib /usr/local/lib
     )
     find_library(AVUTIL_LIB
         NAMES libavutil.so.59 libavutil.so.58 libavutil.so.57 libavutil.so.56 libavutil
-        PATHS /usr/lib/aarch64-linux-gnu /usr/lib /usr/local/lib
+        PATHS /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu /usr/lib /lib /usr/local/lib
     )
     if(AVFORMAT_LIB AND AVCODEC_LIB AND AVUTIL_LIB)
         # 静态 .a 回退：补 FFmpeg 传递依赖（zlib/bz2/lzma/swresample/drm），
