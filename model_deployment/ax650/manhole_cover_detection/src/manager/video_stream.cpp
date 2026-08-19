@@ -26,7 +26,7 @@
 
 #include "inference_manager.h"
 
-#define MAX_CONSECUTIVE_ERRORS 5  // 鍏佽鐨勬渶澶ц繛缁敊璇鏁?
+#define MAX_CONSECUTIVE_ERRORS 5  // 閸忎浇顔忛惃鍕付婢堆嗙箾缂侇參鏁婄拠顖涱偧閺?
 
 static bool is_osd_disabled_by_env() {
     const char* v = std::getenv("AX_DISABLE_OSD");
@@ -56,7 +56,7 @@ public:
     }
 
     void enqueue(AlarmTask task) {
-        // 鍛婅寰岀閫ｄ笉涓婃檪閫插叆鍐峰嵒锛岄伩鍏嶆寔绾屽爢绌嶄换鍕欏奖闊挎暣楂斿鏅傛€?
+        // 閸涘﹨顒熷宀€顏柅锝勭瑝娑撳﹥妾柅鎻掑弳閸愬嘲宓掗敍宀勪缉閸忓秵瀵旂痪灞界垻缁屽秳鎹㈤崟娆忓闂婃寧鏆ｆ鏂款嚊閺呭倹鈧?
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch())
                                 .count();
@@ -64,7 +64,7 @@ public:
             return;
         }
 
-        // 灏?localhost 鍛婅鏈嶅嫏鎺＄敤鏇寸煭 timeout锛岄伩鍏嶉暦鏅傞枔闃诲鍦ㄥけ鏁楄珛姹?
+        // 鐏?localhost 閸涘﹨顒熼張宥呭珡閹猴紕鏁ら弴瀵哥叚 timeout閿涘矂浼╅崗宥夋殾閺呭倿鏋旈梼璇差敚閸︺劌銇戦弫妤勭彌濮?
         if (task.url.find("127.0.0.1") != std::string::npos ||
             task.url.find("localhost") != std::string::npos) {
             task.timeoutSec = 1;
@@ -74,7 +74,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(mutex_);
             if (queue_.size() >= kMaxQueueSize) {
-                // 闅婂垪婊挎檪涓熸鏈€鑸婁换鍕欙紝鍎厛淇濊瓑涓昏闋婚張璺?
+                // 闂呭﹤鍨鎸庢娑撶喐顥夐張鈧懜濠佹崲閸曟瑱绱濋崕顏勫帥娣囨繆鐡戞稉鏄忣浕闂嬪寮电捄?
                 queue_.pop();
             }
             queue_.push(std::move(task));
@@ -96,10 +96,9 @@ private:
 
             auto response = HttpClient::post(task.url, task.payload, task.timeoutSec);
             if (response.statusCode != 200) {
-                // 寰岀涓嶅彲閬旀檪閬垮厤楂橀牷閲嶈│鑸囬珮闋绘棩瑾岋紝闄嶄綆 CPU/IO 鎶栧嫊灏嶅鏅傞張璺殑褰遍熆
-                static int fail_log_count = 0;
+                // 瀵板瞼顏稉宥呭讲闁梹妾柆鍨帳妤傛﹢鐗烽柌宥堚攤閼稿洭鐝棆缁樻）鐟惧矉绱濋梽宥勭秵 CPU/IO 閹舵牕瀚婄亸宥咁嚊閺呭倿寮电捄顖滄畱瑜伴亶鐔?                static int fail_log_count = 0;
                 if (++fail_log_count % 120 == 0) {
-                    ALOGW("[Alarm] 鍙戦€佸け璐? status=%d, error=%s",
+                    ALOGW("[Alarm] 閸欐垿鈧礁銇戠拹? status=%d, error=%s",
                           response.statusCode, response.error.c_str());
                 }
 
@@ -108,9 +107,7 @@ private:
                     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                             std::chrono::steady_clock::now().time_since_epoch())
                                             .count();
-                    cooldown_until_ms_.store(now_ms + 30000, std::memory_order_relaxed); // 30s 鐔旀柗
-                    // 鐔旀柗鏅傛竻绌洪殜鍒楋紝閬垮厤绌嶅浠诲嫏寰岀簩绐佺櫦閫佸嚭
-                    std::lock_guard<std::mutex> lk(mutex_);
+                    cooldown_until_ms_.store(now_ms + 30000, std::memory_order_relaxed); // 30s 閻旀梹鏌?                    // 閻旀梹鏌楅弲鍌涚缁屾椽娈滈崚妤嬬礉闁灝鍘ょ粚宥咁棙娴犺瀚忓宀€绨╃粣浣烘闁礁鍤?                    std::lock_guard<std::mutex> lk(mutex_);
                     std::queue<AlarmTask> empty;
                     queue_.swap(empty);
                 }
@@ -133,7 +130,7 @@ private:
 
 static AsyncAlarmSender g_alarmSender;
 
-// 绮惧害灏嶆瘮绲愭灉涓婂牨锛堢暟姝?POST /api/benchmark/result锛宻ource=edge锛?
+// 缁儳瀹崇亸宥嗙槷缁叉劖鐏夋稉濠傜墾閿涘牏鏆熷?POST /api/benchmark/result閿涘ource=edge閿?
 class AsyncBenchmarkSender {
 public:
     struct Task {
@@ -164,7 +161,7 @@ private:
             }
             auto response = HttpClient::post(task.url, task.payload, task.timeoutSec);
             if (response.statusCode != 200) {
-                ALOGW("[Benchmark] 涓婂牨澶辨晽: status=%d", response.statusCode);
+                ALOGW("[Benchmark] 娑撳﹤鐗ㄦ径杈ㄦ櫧: status=%d", response.statusCode);
             }
         }
     }
@@ -182,7 +179,7 @@ static std::string toLowerCodec(std::string codec) {
     return codec;
 }
 
-// 鍏ㄥ眬 frame_id 鐢ㄦ柤绮惧害灏嶆瘮涓婂牨锛堝緦绔寜鏅傞枔鎴冲皪榻婏紝姝よ檿鍍呴渶閬炲锛?
+// 閸忋劌鐪?frame_id 閻劍鏌ょ划鎯у鐏忓秵鐦稉濠傜墾閿涘牆绶︾粩顖涘瘻閺呭倿鏋旈幋鍐茬毆姒诲绱濆銈堟閸嶅懘娓堕柆鐐差杻閿?
 static std::atomic<uint64_t> g_benchmark_frame_id(0);
 
 struct BenchmarkReportCfg {
@@ -194,8 +191,7 @@ struct BenchmarkReportCfg {
 static BenchmarkReportCfg loadBenchmarkReportCfg() {
     BenchmarkReportCfg cfg;
 
-    // 1) env 闁嬮棞锛堝悜寰岀浉瀹癸級
-    const char* backendUrlEnv = getenv("BACKEND_API_URL");
+    // 1) env 闂佸妫為敍鍫濇倻瀵板瞼娴夌€圭櫢绱?    const char* backendUrlEnv = getenv("BACKEND_API_URL");
     if (backendUrlEnv && *backendUrlEnv) cfg.backendUrl = backendUrlEnv;
 
     const char* enableEnv = getenv("BENCHMARK_REPORT");
@@ -205,15 +201,15 @@ static BenchmarkReportCfg loadBenchmarkReportCfg() {
     const char* sidEnv = getenv("BENCHMARK_REPORT_STREAM_ID");
     if (sidEnv && *sidEnv) cfg.streamId = atoi(sidEnv);
 
-    // 2) /dev/shm 妾旀闁嬮棞锛堝彲鐢卞緦绔嫊鎱嬪鍏ワ紝涓嶉渶閲嶅暉閫茬▼锛?
-    //    妾旀鏍煎紡锛?
+    // 2) /dev/shm 濡炬梹顢嶉梺瀣閿涘牆褰查悽鍗炵乏缁旑垰瀚婇幈瀣嚑閸忋儻绱濇稉宥夋付闁插秴鏆夐柅鑼柤閿?
+    //    濡炬梹顢嶉弽鐓庣础閿?
     //    { "enabled": true, "backend_url": "http://x.x.x.x:8001", "stream_id": 0 }
     try {
         static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         static BenchmarkReportCfg cached = cfg;
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count() < 500) {
-            return cached; // 閬垮厤姣忓箑璁€妾?
+            return cached; // 闁灝鍘ゅВ蹇撶畱鐠佲偓濡?
         }
         last = now;
 
@@ -241,7 +237,7 @@ static BenchmarkReportCfg loadBenchmarkReportCfg() {
 static VideoStreamManager* g_stream_manager = nullptr;
 static std::mutex g_stream_manager_mutex;
 
-// 涓婂牨 benchmark / 鍛婅 / OSD 绶╁瓨 / updateAIResult锛圓IWorker 鍚屾鑸囨祦姘寸窔鍏辩敤锛?
+// 娑撳﹤鐗?benchmark / 閸涘﹨顒?/ OSD 缁垛晛鐡?/ updateAIResult閿涘湏IWorker 閸氬本顒為懜鍥ㄧウ濮樺绐旈崗杈╂暏閿?
 void deliverWorkerInferenceResult(VideoStream* s, int streamId, bool processSuccess, AI_RESULT_T& stResult,
                                   double inferenceTimeMs) {
     if (!processSuccess) {
@@ -300,7 +296,7 @@ void deliverWorkerInferenceResult(VideoStream* s, int streamId, bool processSucc
     if (g_stream_manager) g_stream_manager->updateAIResult(streamId, &stResult);
 }
 
-// 姣忚矾 AI 鍥哄畾涓€鍊?worker 绶氱▼锛岄伩鍏嶆瘡骞€ std::thread().detach() 灏庤嚧闀锋檪闁撻亱琛屽緦绶氱▼/瑷樻喍楂旇硣婧愯€楃洝锛垀10 鍒嗛悩鏂锋祦锛?
+// 濮ｅ繗鐭?AI 閸ュ搫鐣炬稉鈧崐?worker 缁舵氨鈻奸敍宀勪缉閸忓秵鐦￠獮鈧?std::thread().detach() 鐏忓氦鍤ч梹閿嬫闂佹捇浜辩悰灞界乏缁舵氨鈻?鐟锋ɑ鍠嶆鏃囩。濠ф劘鈧娲濋敍鍨€10 閸掑棝鎮╅弬閿嬬ウ閿?
 struct AIFrameJob {
     std::vector<uint8_t> frameData;
     uint32_t w = 0, h = 0, stridePix = 0, sz = 0;
@@ -411,8 +407,12 @@ private:
                     ALOGW("Too many consecutive errors, disabling AI for stream %d", streamId_);
                     s->setAIEnabled(false);
                     std::lock_guard<std::mutex> lock(g_stream_manager_mutex);
-                    if (g_stream_manager) g_stream_m…3414 tokens truncated…ks_.fetch_add(1, std::memory_order_relaxed);
-}
+                    if (g_stream_manager) g_stream_manager->updateAIResult(streamId_, &stResult);
+                }
+            }
+        }
+    }
+};
 
 void VideoStream::onCallbackExit() {
     if (activeCallbacks_.fetch_sub(1, std::memory_order_relaxed) == 1) {
@@ -420,8 +420,7 @@ void VideoStream::onCallbackExit() {
     }
 }
 
-// 鍔ㄦ€佹洿鏂版祦閰嶇疆
-void VideoStream::updateConfig(const StreamConfig& newConfig) {
+// 閸斻劍鈧焦娲块弬鐗堢ウ闁板秶鐤?void VideoStream::updateConfig(const StreamConfig& newConfig) {
     StreamConfig oldConfig;
     bool needRestart = false;
     {
@@ -472,7 +471,7 @@ void VideoStream::updateConfig(const StreamConfig& newConfig) {
     }
 }
 
-// 璁剧疆AI鍚敤鐘舵€?
+// 鐠佸墽鐤咥I閸氼垳鏁ら悩鑸碘偓?
 void VideoStream::setAIEnabled(bool enable) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.enableAI = enable;
@@ -484,21 +483,20 @@ void VideoStream::setAIEnabled(bool enable) {
     }
 }
 
-// 娓呴櫎鍛戒护琛屾ā鍨嬫瑷橈紝鍏佽ū Web 閰嶇疆瑕嗚搵
+// 濞撳懘娅庨崨鎴掓姢鐞涘本膩閸ㄥ顬跨懛姗堢礉閸忎浇奴 Web 闁板秶鐤嗙憰鍡氭惖
 void VideoStream::clearCommandLineModelFlag() {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.isCommandLineModel = false;
 }
 
-// 娓呴櫎 OSD 椤ず
-void VideoStream::clearOSD() {
+// 濞撳懘娅?OSD 妞ゎ垳銇?void VideoStream::clearOSD() {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (osdRenderer_) {
         osdRenderer_->clear();
     }
 }
 
-// 璁剧疆闃堝€?
+// 鐠佸墽鐤嗛梼鍫濃偓?
 void VideoStream::setThresholds(float conf, float nms) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     for (auto& p : aiProcessors_) {
@@ -506,7 +504,7 @@ void VideoStream::setThresholds(float conf, float nms) {
     }
 }
 
-// 鏇存柊鐣跺墠妯″瀷璺緫锛堝垏鎻涙ā鍨嬪緦蹇呴爤瑾跨敤锛屽惁鍓?getModelPath() 浠嶇偤鑸婂€硷級
+// 閺囧瓨鏌婇悾璺哄濡€崇€风捄顖氱帆閿涘牆鍨忛幓娑櫮侀崹瀣乏韫囧懘鐖ょ懢璺ㄦ暏閿涘苯鎯侀崜?getModelPath() 娴犲秶鍋ら懜濠傗偓纭风礆
 void VideoStream::setModelPath(const std::string& path) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.modelPath = path;
@@ -517,7 +515,7 @@ void VideoStream::setModelName(const std::string& name) {
     config_.modelName = name;
 }
 
-// 鏇存柊澶氭ā鍨嬮厤缃?
+// 閺囧瓨鏌婃径姘侀崹瀣帳缂?
 void VideoStream::setModelStages(const std::vector<ModelStageConfig>& stages, AIPipelineMode mode) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.modelStages = stages;
@@ -531,7 +529,7 @@ void VideoStream::setModelStages(const std::vector<ModelStageConfig>& stages, AI
     }
 }
 
-// 鑾峰彇妯″瀷璺緞锛堝妯″瀷鏅傝繑鍥炵涓€鍊嬶級
+// 閼惧嘲褰囧Ο鈥崇€风捄顖氱窞閿涘牆顦垮Ο鈥崇€烽弲鍌濈箲閸ョ偟顑囨稉鈧崐瀣剁礆
 std::string VideoStream::getModelPath() const {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (!config_.modelPath.empty()) return config_.modelPath;
@@ -555,8 +553,7 @@ std::vector<std::string> VideoStream::getModelPaths() const {
     return paths;
 }
 
-// 鍦?worker 绶氱▼涓煼琛屾帹鐞嗙殑闈滄厠鍑芥暩锛堣垏涓诲洖瑾垮叡浜殑閭忚集锛岄伩鍏嶅湪 IVPS 绶氱▼涓樆濉烇級
-bool runAIInference(VideoStream* stream, AX_VIDEO_FRAME_T* tFrame, AI_RESULT_T* stResult) {
+// 閸?worker 缁舵氨鈻兼稉顓炵吋鐞涘本甯归悶鍡欐畱闂堟粍鍘犻崙鑺ユ毄閿涘牐鍨忔稉璇叉礀鐟惧灝鍙℃禍顐ゆ畱闁繗闆嗛敍宀勪缉閸忓秴婀?IVPS 缁舵氨鈻兼稉顓㈡▎婵夌儑绱?bool runAIInference(VideoStream* stream, AX_VIDEO_FRAME_T* tFrame, AI_RESULT_T* stResult) {
     if (!stream || !tFrame || !stResult) return false;
     InferenceManager* mgr = nullptr;
     {
@@ -571,7 +568,7 @@ bool runAIInference(VideoStream* stream, AX_VIDEO_FRAME_T* tFrame, AI_RESULT_T* 
 void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
     if (!buf) return;
 
-    // 鍦ㄥ嚱鏁稿叆鍙ｅ氨瑷橀寗锛岀⒑瑾嶅洖瑾胯瑾跨敤锛堟瘡30娆¤閷勪竴娆★級
+    // 閸︺劌鍤遍弫绋垮弳閸欙絽姘ㄧ懛姗€瀵楅敍宀€鈷戠懢宥呮礀鐟捐儻顫︾懢璺ㄦ暏閿涘牊鐦?0濞喡ゎ灳闁峰嫪绔村▎鈽呯礆
     static int entry_count[64] = {0};
     if (++entry_count[buf->pipeid] % 300 == 0) {
         ALOGN("[AI] aiInferenceCallback ENTRY for pipeid=%d, output_type=%d, frame_size=%dx%d", 
@@ -585,12 +582,12 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         if (it != g_stream_instances.end()) {
             stream = it->second;
         } else {
-            // [瑾胯│] 绔嬪嵆瑷橀寗鎵句笉鍒?stream 鐨勬儏娉侊紙姣?0娆¤閷勪竴娆★級
+            // [鐟捐儻鈹俔 缁斿宓嗙懛姗€瀵楅幍鍙ョ瑝閸?stream 閻ㄥ嫭鍎忓▔渚婄礄濮?0濞喡ゎ灳闁峰嫪绔村▎鈽呯礆
             static int not_found_count[64] = {0};
             if (++not_found_count[buf->pipeid] % 30 == 0) {
                 ALOGW("[AI] aiInferenceCallback: stream not found in g_stream_instances for pipeid=%d (total instances: %zu)", 
                       buf->pipeid, g_stream_instances.size());
-                // 鎵撳嵃鎵€鏈夊凡瑷诲唺鐨?pipeid
+                // 閹垫挸宓冮幍鈧張澶婂嚒鐟疯鍞洪惃?pipeid
                 for (const auto& pair : g_stream_instances) {
                     ALOGW("[AI]   Registered: pipeid=%d -> streamId=%d", 
                           pair.first, pair.second ? pair.second->config_.streamId : -1);
@@ -603,14 +600,14 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         return;
     }
     
-    // 瑷橀寗鍥炶琚鐢紙姣?0骞€瑷橀寗涓€娆★級
+    // 鐟锋﹢瀵楅崶鐐额€炵悮顐ヮ€為悽顭掔礄濮?0楠炩偓鐟锋﹢瀵楁稉鈧▎鈽呯礆
     static int callback_count[64] = {0};
     if (++callback_count[stream->config_.streamId] % 300 == 0) {
         ALOGN("[AI] aiInferenceCallback called for stream %d (pipeid=%d, frame_size=%d)", 
               stream->config_.streamId, buf->pipeid, buf->n_size);
     }
 
-    // 妾㈡煡閫€鍑烘瑾岋紝鎻愬墠杩斿洖閬垮厤铏曠悊宸插仠姝㈢殑娴?
+    // 濡俱垺鐓￠柅鈧崙鐑橆灴鐟惧矉绱濋幓鎰鏉╂柨娲栭柆鍨帳閾忔洜鎮婂鎻掍粻濮濄垻娈戝ù?
     if (stream->pipeline_.n_loog_exit) {
         return;
     }
@@ -632,7 +629,7 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         return;
     }
 
-    // [鏁堣兘/寤堕伈鍎寲] 闄嶄綆 AI 鎺ㄧ悊闋荤巼鍒颁富纰兼祦鐨?1/3锛堜緥濡?30fps 鈫?10fps锛?
+    // [閺佸牐鍏?瀵ゅ爼浼堥崕顏勫] 闂勫秳缍?AI 閹恒劎鎮婇棆鑽ゅ芳閸掗瀵岀喊鍏肩ウ閻?1/3閿涘牅绶ユ俊?30fps 閳?10fps閿?
     static int infer_stride_count[64] = {0};
     static int adaptive_stride[64] = {0};
     static int submit_fail_count[64] = {0};
@@ -644,8 +641,8 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         return;
     }
 
-    // [闂滈嵉淇京] 澶氳矾澶氭ā鍨嬫檪 AI 鍥炶鏈冮樆濉?IVPS 绶氱▼锛屽皫鑷磋垏涓荤⒓娴佸叡鐢ㄧ殑 VDEC 鐒℃硶鍚戜富 IVPS 閫佸箑锛屼富纰兼祦 RTP 鍋滄銆?
-    // 鍋氭硶锛氳瑁藉箑寰岀珛鍗宠繑鍥烇紝鍦?worker 绶氱▼涓煼琛屾帹鐞嗭紝浣?IVPS 绶氱▼鐩″揩 ReleaseChnFrame锛屼笉闃诲 VDEC銆?
+    // [闂傛粓宓夋穱顔间含] 婢舵俺鐭炬径姘侀崹瀣 AI 閸ョ偠顎為張鍐▎婵?IVPS 缁舵氨鈻奸敍灞界毇閼风鍨忔稉鑽も挀濞翠礁鍙￠悽銊ф畱 VDEC 閻掆剝纭堕崥鎴滃瘜 IVPS 闁礁绠戦敍灞煎瘜绾板吋绁?RTP 閸嬫粍顒涢妴?
+    // 閸嬫碍纭堕敍姘愁槵鐟佽棄绠戝宀€鐝涢崡瀹犵箲閸ョ儑绱濋崷?worker 缁舵氨鈻兼稉顓炵吋鐞涘本甯归悶鍡礉娴?IVPS 缁舵氨鈻奸惄鈥虫彥 ReleaseChnFrame閿涘奔绗夐梼璇差敚 VDEC閵?
     AX_BOOL bMapped = AX_FALSE;
     if (!buf->p_vir && buf->p_phy) {
         buf->p_vir = AX_SYS_Mmap(buf->p_phy, buf->n_size);
@@ -657,11 +654,11 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
     std::vector<uint8_t> frameData((uint8_t*)buf->p_vir, (uint8_t*)buf->p_vir + buf->n_size);
     const uint32_t w = buf->n_width, h = buf->n_height, stridePix = buf->n_stride, sz = buf->n_size;
 
-    // 鎻愪氦绲︽湰娴佸皥鐢?worker 绶氱▼锛堝浐瀹氱窔绋嬶紝涓嶆瘡骞€鏂板缓锛夛紝浣囧垪婊垮墖涓熷箑
+    // 閹绘劒姘︾徊锔芥拱濞翠礁鐨ラ悽?worker 缁舵氨鈻奸敍鍫濇祼鐎规氨绐旂粙瀣剁礉娑撳秵鐦￠獮鈧弬鏉跨紦閿涘绱濇担鍥у灙濠婂灝澧栨稉鐔风畱
     if (!stream->submitAIFrame(std::move(frameData), w, h, stridePix, sz)) {
         submit_fail_count[idx]++;
         submit_ok_count[idx] = 0;
-        // Worker 绻佸繖鏅傝嚜閬╂噳闄嶉牷锛屽劒鍏堜繚闅滀富纰兼祦/VENC 璺緫銆?
+        // Worker 缁讳礁绻栭弲鍌濆殰闁晜鍣抽梽宥夌壏閿涘苯鍔掗崗鍫滅箽闂呮粈瀵岀喊鍏肩ウ/VENC 鐠侯垰绶妴?
         if (submit_fail_count[idx] % 4 == 0 && adaptive_stride[idx] < 18) {
             adaptive_stride[idx]++;
         }
@@ -683,73 +680,69 @@ bool VideoStream::submitAIFrame(std::vector<uint8_t> frameData, uint32_t w, uint
     return aiWorker_->submit(std::move(frameData), w, h, stridePix, sz);
 }
 
-// 鍒涘缓澶勭悊娴佺▼锛坧ipeline锛?
+// 閸掓稑缂撴径鍕倞濞翠胶鈻奸敍鍧peline閿?
 bool VideoStream::createProcessingPipeline() {
-    // 閲嶆柊瑷疆 pipeline 鐨勮几鍑洪鍨嬪拰鍥炶鍑芥暩锛堝弮鑰?ai_platform_RTP锛?
-    // 閫欎簺瑷疆蹇呴爤鍦ㄦ瘡娆″壍寤?pipeline 鏅傞噸鏂拌ō缃?
+    // 闁插秵鏌婄懛顓犵枂 pipeline 閻ㄥ嫯鍑犻崙娲敚閸ㄥ鎷伴崶鐐额€為崙鑺ユ毄閿涘牆寮懓?ai_platform_RTP閿?
+    // 闁瑤绨虹懛顓犵枂韫囧懘鐖ら崷銊︾槨濞嗏€冲瀵?pipeline 閺呭倿鍣搁弬鎷屌嶇純?
     if (config_.isRTSPOutput) {
-        // RTSP鎺ㄦ祦
-        pipeline_.m_output_type = po_rtsp_h264;
+        // RTSP閹恒劍绁?        pipeline_.m_output_type = po_rtsp_h264;
         snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
                 "%s%d", config_.rtspEndpoint.c_str(), config_.streamId);
         pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
     } else if (config_.isMediaMTXOutput) {
-        // MediaMTX鎺ㄩ€?
-        // 姣忓€嬩富纰兼祦浣跨敤涓嶅悓鐨?VENC channel锛坰treamId锛夛紝閬垮厤澶氬€嬩富纰兼祦琛濈獊
-        pipeline_.m_output_type = po_mediamtx_h264;
+        // MediaMTX閹恒劑鈧?
+        // 濮ｅ繐鈧瀵岀喊鍏肩ウ娴ｈ法鏁ゆ稉宥呮倱閻?VENC channel閿涘澃treamId閿涘绱濋柆鍨帳婢舵艾鈧瀵岀喊鍏肩ウ鐞涙繄鐛?        pipeline_.m_output_type = po_mediamtx_h264;
         snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
                 "%s", config_.mediamtxEndpoint.c_str());
-        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;  // 浣跨敤 streamId 浣滅偤 VENC channel锛岄伩鍏嶈绐?
+        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;  // 娴ｈ法鏁?streamId 娴ｆ粎鍋?VENC channel閿涘矂浼╅崗宥堫敘缁?
         ALOGN("[VideoStream] Stream %d MediaMTX endpoint set to: %s", 
               config_.streamId, config_.mediamtxEndpoint.c_str());
     } else if (config_.enableAI) {
-        // AI鎺ㄧ悊杈撳嚭涓篘V12缂撳啿鍖?
+        // AI閹恒劎鎮婃潏鎾冲毉娑撶瘶V12缂傛挸鍟块崠?
         pipeline_.m_output_type = po_buff_nv12;
-        pipeline_.output_func = aiInferenceCallback;  // 閲嶆柊瑷疆鍥炶鍑芥暩
-        // AI 娴佷笉浣跨敤 VENC锛屾竻闄?VENC 閰嶇疆
-        pipeline_.m_venc_attr.n_venc_chn = -1;  // 瑷疆鐐虹劇鏁堝€硷紝琛ㄧず涓嶄娇鐢?VENC
+        pipeline_.output_func = aiInferenceCallback;  // 闁插秵鏌婄懛顓犵枂閸ョ偠顎為崙鑺ユ毄
+        // AI 濞翠椒绗夋担璺ㄦ暏 VENC閿涘本绔婚梽?VENC 闁板秶鐤?        pipeline_.m_venc_attr.n_venc_chn = -1;  // 鐟奉厾鐤嗛悙铏瑰妵閺佸牆鈧》绱濈悰銊с仛娑撳秳濞囬悽?VENC
         if (!aiWorker_) aiWorker_ = std::make_unique<AIWorker>(config_.streamId);
         ALOGN("[VideoStream] Setting output_func for AI stream %d", config_.streamId);
     }
     
-    // 瑷疆 pipeline ID锛堝繀闋堝湪 create_pipeline 涔嬪墠瑷疆锛?
+    // 鐟奉厾鐤?pipeline ID閿涘牆绻€闂嬪牆婀?create_pipeline 娑斿澧犵懛顓犵枂閿?
     pipeline_.pipeid = config_.streamId;
     
-    // 瑷疆杓稿叆椤炲瀷锛堟敮鎻?inputCodec=h264/h265/auto锛?
+    // 鐟奉厾鐤嗘潛绋垮弳妞ょ偛鐎烽敍鍫熸暜閹?inputCodec=h264/h265/auto閿?
     pipeline_.m_input_type = preferredInputType_;
     
-    // 鎸夊綋鍓嶉厤缃垵濮嬪寲pipeline
+    // 閹稿缍嬮崜宥夊帳缂冾喖鍨垫慨瀣pipeline
     configureIVPS();
     configureVDEC();
-    // AI 娴佷娇鐢?po_buff_nv12锛屼笉闇€瑕?VENC
-    // 鍙湁 RTSP 鍜?MediaMTX 杓稿嚭鎵嶉渶瑕?VENC
+    // AI 濞翠椒濞囬悽?po_buff_nv12閿涘奔绗夐棁鈧憰?VENC
+    // 閸欘亝婀?RTSP 閸?MediaMTX 鏉撶鍤幍宥夋付鐟?VENC
     if (config_.isRTSPOutput || config_.isMediaMTXOutput) {
         configureVENC();
     } else if (config_.enableAI) {
-        // AI 娴侊細纰轰繚涓嶉厤缃?VENC锛堜娇鐢?po_buff_nv12锛?
-        // 娓呴櫎浠讳綍鍙兘鐨?VENC 閰嶇疆
-        pipeline_.m_venc_attr.n_venc_chn = -1;  // 瑷疆鐐虹劇鏁堝€硷紝琛ㄧず涓嶄娇鐢?VENC
+        // AI 濞翠緤绱扮喊杞扮箽娑撳秹鍘ょ純?VENC閿涘牅濞囬悽?po_buff_nv12閿?
+        // 濞撳懘娅庢禒璁崇秿閸欘垵鍏橀惃?VENC 闁板秶鐤?        pipeline_.m_venc_attr.n_venc_chn = -1;  // 鐟奉厾鐤嗛悙铏瑰妵閺佸牆鈧》绱濈悰銊с仛娑撳秳濞囬悽?VENC
     }
     
-    // 鍟熺敤 pipeline锛堝繀闋堝湪 create_pipeline 涔嬪墠瑷疆锛?
+    // 閸熺喓鏁?pipeline閿涘牆绻€闂嬪牆婀?create_pipeline 娑斿澧犵懛顓犵枂閿?
     pipeline_.enable = 1;
-    pipeline_.n_loog_exit = 0;  // 閲嶇疆閫€鍑烘瑾岋紙鍙冭€?ai_platform_RTP锛?
+    pipeline_.n_loog_exit = 0;  // 闁插秶鐤嗛柅鈧崙鐑橆灴鐟惧矉绱欓崣鍐偓?ai_platform_RTP閿?
     
-    // 鍚姩pipeline
+    // 閸氼垰濮﹑ipeline
     int ret = create_pipeline(&pipeline_);
     if (ret != 0) {
         ALOGE("Failed to create pipeline %d", config_.streamId);
-        pipeline_.enable = 0;  // 鍓靛缓澶辨晽鏅傞噸缃?
+        pipeline_.enable = 0;  // 閸撻潧缂撴径杈ㄦ櫧閺呭倿鍣哥純?
         return false;
     }
     
-    // 鍒ゆ柗鏄惁闇€瑕?OSD锛氬儏鍦ㄥ暉鐢?AI 鏅傛帥杓夛紝闂滈枆 AI 鏅傚彲娓│鏄惁鐐?OSD 灏庤嚧娈樺奖
+    // 閸掋倖鏌楅弰顖氭儊闂団偓鐟?OSD閿涙艾鍎忛崷銊ユ殙閻?AI 閺呭倹甯ユ潛澶涚礉闂傛粓鏋?AI 閺呭倸褰插〒顒冣攤閺勵垰鎯侀悙?OSD 鐏忓氦鍤у▓妯哄
     bool needOSD = config_.enableAI && !is_osd_disabled_by_env();
     if (needOSD && !osdRenderer_) {
         osdRenderer_ = make_unique<OSDRenderer>(&pipeline_);
     }
     
-    // 鍒濆鍖朞SD
+    // 閸掓繂顫愰崠鏈濻D
     // #region agent log
     debug_log("video_stream.cpp:562", "OSD initialization: starting", {
         {"stream_id", std::to_string(config_.streamId)},
@@ -798,16 +791,14 @@ void VideoStream::configureIVPS() {
     ivps.n_ivps_width = config_.outputWidth;
     ivps.n_ivps_height = config_.outputHeight;
     ivps.n_ivps_fps = config_.fps;
-    // 璁?IVPS 鍦ㄩ渶瑕佽几鍑虹郸 RTSP/MediaMTX锛堜富纰兼祦锛夋檪涔熻兘鍟熷嫊銆?
-    // Raw 涓荤⒓娴佺殑 enableAI=false锛堜笉鐣?OSD锛変絾浠嶉渶瑕?IVPS 鐢㈢敓鍙法纰艰几鍑恒€?
+    // 鐠?IVPS 閸︺劑娓剁憰浣藉嚑閸戣櫣閮?RTSP/MediaMTX閿涘牅瀵岀喊鍏肩ウ閿涘妾稊鐔诲厴閸熺喎瀚婇妴?
+    // Raw 娑撹崵鈷撳ù浣烘畱 enableAI=false閿涘牅绗夐悾?OSD閿涘绲炬禒宥夋付鐟?IVPS 閻垻鏁撻崣顖滄硶绾拌壈鍑犻崙鎭掆偓?
     ivps.n_fifo_count =
         (config_.enableAI || config_.isRTSPOutput || config_.isMediaMTXOutput) ? 1 : 0;
-    bool needOSD = config_.enableAI && !is_osd_disabled_by_env();  // 鍙敱 AX_DISABLE_OSD=1 寮峰埗闂滈枆 OSD
-    // 鍙娇鐢?1 鍊?OSD 鍗€鍩熶甫鍙洿鏂拌┎鍗€鍩燂紝閬垮厤澶氬崁鍩熸湭鍚屾鏇存柊灏庤嚧 IVPS 鍚堟垚鑺卞睆/鑹插
-    ivps.n_osd_rgn = needOSD ? 1 : 0;
+    bool needOSD = config_.enableAI && !is_osd_disabled_by_env();  // 閸欘垳鏁?AX_DISABLE_OSD=1 瀵嘲鍩楅梻婊堟瀱 OSD
+    // 閸欘亙濞囬悽?1 閸?OSD 閸椻偓閸╃喍鐢崣顏呮纯閺傛媽鈹庨崡鈧崺鐕傜礉闁灝鍘ゆ径姘磥閸╃喐婀崥灞绢劄閺囧瓨鏌婄亸搴ゅ毀 IVPS 閸氬牊鍨氶懞鍗炵潌/閼规彃顢?    ivps.n_osd_rgn = needOSD ? 1 : 0;
     
-    // 瑷橀寗 IVPS 閰嶇疆
-    ALOGN("[VideoStream] Stream %d IVPS config: grp=%d, size=%dx%d, fps=%d, n_fifo_count=%d, n_osd_rgn=%d, enableAI=%d", 
+    // 鐟锋﹢瀵?IVPS 闁板秶鐤?    ALOGN("[VideoStream] Stream %d IVPS config: grp=%d, size=%dx%d, fps=%d, n_fifo_count=%d, n_osd_rgn=%d, enableAI=%d", 
           config_.streamId, ivps.n_ivps_grp, ivps.n_ivps_width, ivps.n_ivps_height, 
           ivps.n_ivps_fps, ivps.n_fifo_count, ivps.n_osd_rgn, config_.enableAI ? 1 : 0);
 }
@@ -828,7 +819,7 @@ void VideoStream::resolveInputCodecConfig() {
     autoCodecFallbackEnabled_ = false;
     autoCodecFallbackSwitched_ = false;
     if (codec == "h265" || codec == "hevc") {
-        // 鐩墠 pipeline_input_e 灏氭湭鎻愪緵 H265 灏嶆噳杓稿叆椤炲瀷锛屽厛瀹夊叏闄嶇礆鐐?H264 閬垮厤绶ㄨ澶辨晽銆?
+        // 閻╊喖澧?pipeline_input_e 鐏忔碍婀幓鎰返 H265 鐏忓秵鍣虫潛绋垮弳妞ょ偛鐎烽敍灞藉帥鐎瑰鍙忛梽宥囩閻?H264 闁灝鍘ょ欢銊劏婢惰鲸鏅介妴?
         ALOGW("[VideoStream] Stream %d input codec '%s' requested but H265 VDEC input type is unavailable, fallback to H264",
               config_.streamId, codec.c_str());
         preferredInputType_ = pi_vdec_h264;
@@ -842,7 +833,7 @@ bool VideoStream::tryAutoCodecFallbackLocked() {
         return false;
     }
 
-    // 鐩墠涓嶆敮鎻?H265 VDEC input type锛屼繚鐣欑媭鎱嬩絾涓嶅槜瑭﹂噸寤?pipeline銆?
+    // 閻╊喖澧犳稉宥嗘暜閹?H265 VDEC input type閿涘奔绻氶悾娆戝閹卞绲炬稉宥呮鐟箓鍣稿?pipeline閵?
     ALOGW("[VideoStream] Stream %d input codec auto-fallback skipped: H265 VDEC input type is unavailable",
           config_.streamId);
     autoCodecFallbackSwitched_ = true;
