@@ -86,8 +86,59 @@ bool H264Demux::open(const std::string& url) {
     fmtCtx_ = fmt;
     opened_ = true;
     eof_ = false;
+    // 从 extradata（avcC 或 SPS/PPS 序列）提取 SPS/PPS 为 AnnexB，供 MPP 首帧前初始化。
+    // RTSP 流的 SPS/PPS 在 SDP/extradata，数据包内通常不含，MPP 需先拿到。
     if (fmt->streams[streamIdx_]->codecpar) {
         const AVCodecParameters* par = fmt->streams[streamIdx_]->codecpar;
+        spsPpsNals_.clear();
+        // avcC 格式：extradata 前 5 字节是配置，之后是 [len4 SPS]*N + [len4 PPS]*M
+        if (par->extradata && par->extradata_size > 7 && par->extradata[0] == 1) {
+            const uint8_t* ed = par->extradata;
+            int off = 5;
+            if (ed[4] != 0xFF) {
+                // 标准 avcC：profile/level 后直接是 SPS 数量（低 5 位）
+                off = 5;
+            }
+            const int numSps = ed[off++] & 0x1F;
+            for (int i = 0; i < numSps && off + 2 <= par->extradata_size; ++i) {
+                const int len = (ed[off] << 8) | ed[off + 1];
+                off += 2;
+                if (off + len <= par->extradata_size) {
+                    spsPpsNals_.push_back(0x00); spsPpsNals_.push_back(0x00);
+                    spsPpsNals_.push_back(0x00); spsPpsNals_.push_back(0x01);
+                    spsPpsNals_.insert(spsPpsNals_.end(), ed + off, ed + off + len);
+                    off += len;
+                }
+            }
+            if (off + 1 <= par->extradata_size) {
+                const int numPps = ed[off++] & 0x1F;
+                for (int i = 0; i < numPps && off + 2 <= par->extradata_size; ++i) {
+                    const int len = (ed[off] << 8) | ed[off + 1];
+                    off += 2;
+                    if (off + len <= par->extradata_size) {
+                        spsPpsNals_.push_back(0x00); spsPpsNals_.push_back(0x00);
+                        spsPpsNals_.push_back(0x00); spsPpsNals_.push_back(0x01);
+                        spsPpsNals_.insert(spsPpsNals_.end(), ed + off, ed + off + len);
+                        off += len;
+                    }
+                }
+            }
+        }
+        if (!spsPpsNals_.empty())
+            fprintf(stderr, "[H264Demux] extracted SPS/PPS from extradata: %zu bytes\n",
+                    spsPpsNals_.size());
+        else if (par->extradata && par->extradata_size >= 4 &&
+                 par->extradata[0] == 0 && par->extradata[1] == 0 &&
+                 par->extradata[2] == 0 && par->extradata[3] == 1) {
+            // extradata 本身已是 AnnexB（RTSP 常见），直接透传
+            spsPpsNals_.assign(par->extradata, par->extradata + par->extradata_size);
+            fprintf(stderr, "[H264Demux] extradata is AnnexB SPS/PPS: %d bytes\n",
+                    par->extradata_size);
+        } else {
+            fprintf(stderr, "[H264Demux] no SPS/PPS extracted (extradata_size=%d, first=%02x)\n",
+                    par->extradata ? par->extradata_size : 0,
+                    par->extradata && par->extradata_size ? par->extradata[0] : 0);
+        }
         fprintf(stderr, "[H264Demux] opened %s: H.264 video stream idx=%d %dx%d, "
                 "duration=%.2fs, nb_frames=%lld\n",
                 url.c_str(), streamIdx_,
@@ -96,6 +147,11 @@ bool H264Demux::open(const std::string& url) {
                 (long long)fmt->streams[streamIdx_]->nb_frames);
     }
     return true;
+}
+
+bool H264Demux::getHeaderNals(std::vector<uint8_t>& out) const {
+    out = spsPpsNals_;
+    return !out.empty();
 }
 
 bool H264Demux::readOnce() {
@@ -115,8 +171,16 @@ bool H264Demux::readOnce() {
     }
 
     bool delivered = false;
-    static int pktLog = 0;
+    // 首个视频包前，先注入从 extradata 提取的 SPS/PPS，让 MPP 能初始化
+    //（RTSP 数据包内通常不含 SPS/PPS，若不先发，MPP 永远等不到关键帧）
     if (pkt->stream_index == streamIdx_) {
+        if (!headerSent_ && !spsPpsNals_.empty()) {
+            headerSent_ = true;
+            if (cb_) cb_(spsPpsNals_.data(), spsPpsNals_.size());
+            fprintf(stderr, "[H264Demux] injected %zu bytes SPS/PPS before first frame\n",
+                    spsPpsNals_.size());
+        }
+        static int pktLog = 0;
         if (bsfCtx_) {
             AVBSFContext* b = static_cast<AVBSFContext*>(bsfCtx_);
             if (av_bsf_send_packet(b, pkt) == 0) {
@@ -161,4 +225,6 @@ void H264Demux::close() {
     streamIdx_ = -1;
     opened_ = false;
     eof_ = false;
+    spsPpsNals_.clear();
+    headerSent_ = false;
 }

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <functional>
+#include <vector>
 
 class H264Demux {
 public:
@@ -27,6 +28,10 @@ public:
     bool readOnce();
     bool eof() const { return eof_; }
 
+    // 返回从 extradata 提取的 SPS/PPS（AnnexB，含 00 00 00 01 起始码）。
+    // RTSP 流的 SPS/PPS 在 SDP/extradata 而非数据包内，MPP 需先拿到才能初始化。
+    bool getHeaderNals(std::vector<uint8_t>& out) const;
+
     void close();
 
 private:
@@ -38,6 +43,8 @@ private:
     bool opened_ = false;
     unsigned long long deliveredCount_ = 0;   // 已送达视频包计数（诊断）
     unsigned long long readCalls_ = 0;        // readOnce 调用次数（诊断）
+    std::vector<uint8_t> spsPpsNals_;         // 从 extradata 提取的 SPS/PPS（AnnexB）
+    bool headerSent_ = false;                 // 首包前是否已先发 SPS/PPS
 };
 
 #endif  // H264_DEMUX_H
