@@ -205,8 +205,9 @@ bool RkEncoder::init(int width, int height, int stride, int fps, int bitrateKbps
     mpp_enc_cfg_set_s32(cfg, "codec:gop", fps * 2);
     mpp_enc_cfg_set_s32(cfg, "codec:fps", fps);
     mpp_enc_cfg_set_s32(cfg, "codec:fps_in_flex", 0);
-    // 用 DEFAULT（而非 EACH_IDR）：SPS/PPS 由 MPP_ENC_GET_HDR_SYNC 单独取，更稳
-    mpp_enc_cfg_set_s32(cfg, "codec:header_mode", MPP_ENC_HEADER_MODE_DEFAULT);
+    // EACH_IDR：每个 IDR 帧内联携带 SPS/PPS，raw 流自包含可解码
+    // （DEFAULT 模式 SPS/PPS 可能未随流输出导致 "non-existing PPS"）
+    mpp_enc_cfg_set_s32(cfg, "codec:header_mode", MPP_ENC_HEADER_MODE_EACH_IDR);
 
     if (mpi->control(ctx, MPP_ENC_SET_CFG, cfg) != MPP_OK) {
         fprintf(stderr, "[RkMedia] MPP_ENC_SET_CFG failed\n");
