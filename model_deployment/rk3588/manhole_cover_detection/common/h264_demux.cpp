@@ -81,6 +81,15 @@ bool H264Demux::open(const std::string& url) {
     fmtCtx_ = fmt;
     opened_ = true;
     eof_ = false;
+    if (fmt->streams[streamIdx_]->codecpar) {
+        const AVCodecParameters* par = fmt->streams[streamIdx_]->codecpar;
+        fprintf(stderr, "[H264Demux] opened %s: H.264 video stream idx=%d %dx%d, "
+                "duration=%.2fs, nb_frames=%lld\n",
+                url.c_str(), streamIdx_,
+                par->width, par->height,
+                fmt->duration > 0 ? (double)fmt->duration / AV_TIME_BASE : 0.0,
+                (long long)fmt->streams[streamIdx_]->nb_frames);
+    }
     return true;
 }
 
@@ -90,6 +99,11 @@ bool H264Demux::readOnce() {
     AVPacket* pkt = av_packet_alloc();
     const int r = av_read_frame(static_cast<AVFormatContext*>(fmtCtx_), pkt);
     if (r < 0) {
+        if (r != AVERROR_EOF) {
+            char errbuf[128] = {0};
+            av_strerror(r, errbuf, sizeof(errbuf));
+            fprintf(stderr, "[H264Demux] av_read_frame error: %s\n", errbuf);
+        }
         eof_ = true;
         av_packet_free(&pkt);
         return false;
