@@ -113,7 +113,3 @@ model_val/rk3588/labels/*
 model_deployment/rk3588/manhole_cover_detection/build/
 model_deployment/rk3588/manhole_cover_detection/bin/
 model_deployment/rk3588/manhole_cover_detection/rknpu2/
-# Local dataset and validation images are not repository source files.
-model_convert/*/dataset/calib_images/*
-model_val/*/images/*
-model_val/*/labels/*
