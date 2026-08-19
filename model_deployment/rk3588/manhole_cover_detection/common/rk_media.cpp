@@ -286,34 +286,43 @@ void RkEncoder::deinit() {
 
 namespace rga_ops {
 
+static void rga_fail(const char* op, IM_STATUS st) {
+    fprintf(stderr, "[RkMedia] RGA %s failed st=%d\n", op, (int)st);
+}
+
 bool resizeNv12(const uint8_t* src, int sw, int sh, int sstride,
                 uint8_t* dst, int dw, int dh, int dstride) {
     if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return false;
+    // RGA stride 为像素：wstride=行宽(像素)，hstride=行数(=高度)
     rga_buffer_t s = wrapbuffer_virtualaddr(const_cast<uint8_t*>(src), sw, sh,
-                                            sstride, sstride, RK_FORMAT_YCbCr_420_SP);
+                                            sstride, sh, RK_FORMAT_YCbCr_420_SP);
     rga_buffer_t d = wrapbuffer_virtualaddr(dst, dw, dh,
-                                            dstride, dstride, RK_FORMAT_YCbCr_420_SP);
+                                            dstride, dh, RK_FORMAT_YCbCr_420_SP);
     IM_STATUS st = imresize(s, d, 0, 0, INTER_LINEAR, 1);
+    if (st != IM_STATUS_SUCCESS) rga_fail("resizeNv12", st);
     return st == IM_STATUS_SUCCESS;
 }
 
 bool nv12ToBgr(const uint8_t* src, int w, int h, int stride, uint8_t* bgr) {
     if (!src || !bgr || w <= 0 || h <= 0) return false;
     rga_buffer_t s = wrapbuffer_virtualaddr(const_cast<uint8_t*>(src), w, h,
-                                            stride, stride, RK_FORMAT_YCbCr_420_SP);
-    rga_buffer_t d = wrapbuffer_virtualaddr(bgr, w, h, w * 3, h, RK_FORMAT_BGR_888);
+                                            stride, h, RK_FORMAT_YCbCr_420_SP);
+    // BGR888 的 wstride 是像素（=w），不是字节数！
+    rga_buffer_t d = wrapbuffer_virtualaddr(bgr, w, h, w, h, RK_FORMAT_BGR_888);
     IM_STATUS st = imcvtcolor(s, d, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888,
                               IM_COLOR_SPACE_DEFAULT, 1);
+    if (st != IM_STATUS_SUCCESS) rga_fail("nv12ToBgr", st);
     return st == IM_STATUS_SUCCESS;
 }
 
 bool bgrToNv12(const uint8_t* bgr, int w, int h, uint8_t* nv12, int stride) {
     if (!bgr || !nv12 || w <= 0 || h <= 0) return false;
     rga_buffer_t s = wrapbuffer_virtualaddr(const_cast<uint8_t*>(bgr), w, h,
-                                            w * 3, h, RK_FORMAT_BGR_888);
-    rga_buffer_t d = wrapbuffer_virtualaddr(nv12, w, h, stride, stride, RK_FORMAT_YCbCr_420_SP);
+                                            w, h, RK_FORMAT_BGR_888);
+    rga_buffer_t d = wrapbuffer_virtualaddr(nv12, w, h, stride, h, RK_FORMAT_YCbCr_420_SP);
     IM_STATUS st = imcvtcolor(s, d, RK_FORMAT_BGR_888, RK_FORMAT_YCbCr_420_SP,
                               IM_COLOR_SPACE_DEFAULT, 1);
+    if (st != IM_STATUS_SUCCESS) rga_fail("bgrToNv12", st);
     return st == IM_STATUS_SUCCESS;
 }
 
