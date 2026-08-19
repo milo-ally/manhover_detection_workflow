@@ -13,16 +13,23 @@ VideoDemux, IVPS/OSD and VENC/RTP. Only the manhole-cover plugin is built and
 loaded. The default configuration is config/streams_config.json; an alternative
 streams configuration can be passed with -c.
 
-Offline video:
+Input limitation: this demo supports H.264 only. H.265/HEVC input is not supported;
+convert the source video to H.264 before using offline inference.
 
-    ./bin/demo -c config/streams_config.json
+Offline video (writes an H.264 elementary stream with OSD overlays):
+
+    ./bin/demo -c config/streams_config.json -m offline -o output.h264
 
 Set input_source to a local file and output to the original MediaMTX/RTP
 configuration when validating an offline or board-side file source.
 
-RTSP input/output:
+Stream mode (RTSP input or MediaMTX/RTP output):
 
-    ./bin/demo -c config/streams_config.json
+    ./bin/demo -c config/streams_config.json -m stream
 
 Set input_source to rtsp://... in streams_config.json. The original VDEC/IVPS/
 VENC/RTP path is used; FFmpeg is not added to the output path.
+
+Help:
+
+    ./bin/demo -h

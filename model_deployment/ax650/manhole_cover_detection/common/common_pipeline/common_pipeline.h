@@ -21,6 +21,8 @@
 #ifndef _PIPELINE_COMMON_H_
 #define _PIPELINE_COMMON_H_
 
+#include <stdio.h>
+
 #ifndef VDEC_LINK_MODE
 #define VDEC_LINK_MODE 1
 #endif
@@ -146,6 +148,8 @@ extern "C"
     {
         int n_venc_chn;        // 少于64 并且不能重复
         char end_point[32];    // rtsp的节点名称 例如 rtsp://x.x.x.x:554/end_point
+        char output_file[256]; // 离线模式下的 H.264 elementary stream 输出路径
+        FILE* output_fp;
         unsigned long int tid; // internal variable
     } pipeline_venc_config_t;
 

@@ -41,6 +41,14 @@ static std::mutex g_rtp_push_mutex_per_pipe[64];
 void *_venc_get_frame_thread(void *arg)
 {
     pipeline_t *pipe = (pipeline_t *)arg;
+    if (pipe->m_output_type == po_venc_h264 && pipe->m_venc_attr.output_file[0] != '\0') {
+        pipe->m_venc_attr.output_fp = fopen(pipe->m_venc_attr.output_file, "wb");
+        if (!pipe->m_venc_attr.output_fp) {
+            ALOGE("[VENC] Failed to open offline output: %s", pipe->m_venc_attr.output_file);
+            return NULL;
+        }
+        ALOGI("[VENC] Offline H.264 output: %s", pipe->m_venc_attr.output_file);
+    }
     ALOGI("[VENC] Thread started for pipeid %d, venc_chn=%d, output_type=%d", 
           pipe->pipeid, pipe->m_venc_attr.n_venc_chn, pipe->m_output_type);
     AX_S16 syncType = 200;
@@ -52,6 +60,10 @@ void *_venc_get_frame_thread(void *arg)
     {
         ALOGE("[VENC] AX_VENC_StartRecvFrame failed for pipeid %d, venc_chn=%d, s32Ret:0x%x", 
               pipe->pipeid, pipe->m_venc_attr.n_venc_chn, s32Ret);
+        if (pipe->m_venc_attr.output_fp) {
+            fclose(pipe->m_venc_attr.output_fp);
+            pipe->m_venc_attr.output_fp = NULL;
+        }
         return NULL;
     }
     ALOGI("[VENC] Started receiving frames for pipeid %d, venc_chn=%d", 
@@ -65,6 +77,10 @@ void *_venc_get_frame_thread(void *arg)
         // printf("%d\n",stStream.stPack.u32Len);
         if (AX_SUCCESS == s32Ret)
         {
+            if (pipe->m_output_type == po_venc_h264 && pipe->m_venc_attr.output_fp) {
+                fwrite(stStream.stPack.pu8Addr, 1, stStream.stPack.u32Len, pipe->m_venc_attr.output_fp);
+                fflush(pipe->m_venc_attr.output_fp);
+            }
             frame_count_per_pipe[pipe->pipeid]++;
             consecutive_fail_count[pipe->pipeid] = 0;
             if (frame_count_per_pipe[pipe->pipeid] % 30 == 0) {
@@ -387,6 +403,10 @@ void *_venc_get_frame_thread(void *arg)
 EXIT:
     ALOGN("[VENC] pipeid %d (venc_chn %d): getStream thread Exit! (n_loog_exit=1, no more RTP from this stream)\n",
           pipe->pipeid, pipe->m_venc_attr.n_venc_chn);
+    if (pipe->m_venc_attr.output_fp) {
+        fclose(pipe->m_venc_attr.output_fp);
+        pipe->m_venc_attr.output_fp = NULL;
+    }
     return NULL;
 }
 

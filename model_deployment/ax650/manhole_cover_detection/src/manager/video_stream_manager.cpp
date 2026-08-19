@@ -87,7 +87,7 @@ void VideoStreamManager::addStream(const StreamConfig& config) {
     // 區分主碼流和 AI 流：
     // 1. 主碼流：enableAI=true 但 isMediaMTXOutput=true，只是為了 OSD，不進行推理
     // 2. AI 流：enableAI=true 但 isMediaMTXOutput=false，進行 AI 推理
-    if (config.enableAI && !config.isMediaMTXOutput) {
+    if (config.enableAI && !config.isMediaMTXOutput && !config.isFileOutput) {
         // 這是 AI 流，註冊到 aiStreamMap_（即使初始時沒有 modelPath）
         // 因為模型可能通過 Web 配置動態設置
         aiStreamMap_[config.streamId] = streams_.size() - 1;
@@ -142,7 +142,7 @@ void VideoStreamManager::addStream(const StreamConfig& config) {
         } else {
             ALOGN("[VideoStreamManager] AI stream %d registered without model (will be set via config)", config.streamId);
         }
-    } else if (config.enableAI && config.isMediaMTXOutput) {
+    } else if (config.enableAI && (config.isMediaMTXOutput || config.isFileOutput)) {
         // 主碼流：enableAI=true 但沒有 modelPath，只是為了 OSD
         ALOGI("Main stream %d registered with OSD support (no AI inference)", config.streamId);
     }
@@ -161,7 +161,7 @@ void VideoStreamManager::removeStream(int streamId) {
         streams_.erase(it);
         aiStreamMap_.clear();
         for(size_t i = 0; i < streams_.size(); ++i) {
-            if(streams_[i].isAIEnabled() && !streams_[i].isMediaMTXOutput()) {
+            if(streams_[i].isAIEnabled() && !streams_[i].isMediaMTXOutput() && !streams_[i].isFileOutput()) {
                 aiStreamMap_[streams_[i].getStreamId()] = i;
             }
         }
@@ -541,7 +541,7 @@ void VideoStreamManager::processFrame(pipeline_buffer_t* buffer, const std::stri
     for (auto& stream : streams_) {
         if (!stream.isRunning()) continue;
         if (!inputSource.empty() && stream.getInputSource() != inputSource) continue;
-        if (stream.isMediaMTXOutput()) matched_main_streams++;
+        if (stream.isMediaMTXOutput() || stream.isFileOutput()) matched_main_streams++;
         else matched_ai_streams++;
     }
     const int total_matched = matched_ai_streams + matched_main_streams;
@@ -558,7 +558,7 @@ void VideoStreamManager::processFrame(pipeline_buffer_t* buffer, const std::stri
     for (auto& stream : streams_) {
         if (!stream.isRunning()) continue;
         if (!inputSource.empty() && stream.getInputSource() != inputSource) continue;
-        if (!stream.isMediaMTXOutput()) continue;
+        if (!stream.isMediaMTXOutput() && !stream.isFileOutput()) continue;
 
         matched_streams++;
         if (frame_count == last_log_frame) {
@@ -575,7 +575,7 @@ void VideoStreamManager::processFrame(pipeline_buffer_t* buffer, const std::stri
     for (auto& stream : streams_) {
         if (!stream.isRunning()) continue;
         if (!inputSource.empty() && stream.getInputSource() != inputSource) continue;
-        if (stream.isMediaMTXOutput()) continue;
+        if (stream.isMediaMTXOutput() || stream.isFileOutput()) continue;
 
         // 來源關鍵幀偶發超大（例如 200KB+）時，若同時餵 AI 支路會放大共享 VDEC 壓力並導致規律卡頓。
         // 對 AI 支路直接跳過超大壓縮幀，優先保證主碼流平滑。
@@ -702,7 +702,8 @@ int VideoStreamManager::getNextAvailableGroup(int baseGroup, int& vdecGroup, int
 }
 
 // 從JSON配置文件加載多流配置
-bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath, const std::string& mediamtxEndpoint) {
+bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath, const std::string& mediamtxEndpoint,
+                                                bool offlineMode, const std::string& outputPath) {
     std::ifstream file(configPath);
     if (!file.is_open()) {
         ALOGE("Failed to open streams config file: %s", configPath.c_str());
@@ -815,7 +816,9 @@ bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath, co
             rtspConfig.inputCodec = inputCodec;
             rtspConfig.ivpsGroup = mainIvpsGroup;
             rtspConfig.vdecGroup = mainVdecGroup;  // 與同輸入源的 AI 流共用 VDEC 組
-            rtspConfig.isMediaMTXOutput = true;
+            rtspConfig.isMediaMTXOutput = !offlineMode;
+            rtspConfig.isFileOutput = offlineMode;
+            rtspConfig.outputFilePath = outputPath;
             // OSD 主碼流：為了確保在 AI 推理啟用後能正常畫框，main pipeline 必须先建好 OSD region
             // （而 raw 主碼流由后面 rawConfig：enableAI=false 保证不含 OSD）。
             rtspConfig.enableAI = true;
@@ -823,8 +826,9 @@ bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath, co
             // 這樣可以確保每個輸入源的主碼流對應正確的 MediaMTX 路徑（live1, live2, ...）
             uint16_t stream_port = mediamtx_base_port + inputSourceIndex * 2;
             rtspConfig.mediamtxEndpoint = mediamtxHost + ":" + std::to_string(stream_port);
-            ALOGN("[Config] Stream %d (input source index %d) will push to MediaMTX: %s (expected path: live%d)", 
-                  rtspConfig.streamId, inputSourceIndex, rtspConfig.mediamtxEndpoint.c_str(), inputSourceIndex + 1);
+            ALOGN("[Config] Stream %d (input source index %d) output=%s",
+                  rtspConfig.streamId, inputSourceIndex,
+                  (offlineMode ? rtspConfig.outputFilePath : rtspConfig.mediamtxEndpoint).c_str());
             
             if (streamConfig.contains("output_width")) {
                 rtspConfig.outputWidth = streamConfig["output_width"];
@@ -1117,7 +1121,7 @@ void VideoStreamManager::initializeOSDForStream(int aiStreamId, VideoStream* aiS
                   stream.getPipeline() ? 1 : 0);
             if (stream.getStreamId() != aiStreamId &&
                 stream.getInputSource() == inputSource &&
-                stream.isMediaMTXOutput() &&
+                (stream.isMediaMTXOutput() || stream.isFileOutput()) &&
                 stream.isRunning() &&
                 stream.getPipeline()) {  // [修復] 確保 pipeline 指針不為空
                 ALOGN("[OSD] Found main stream %d for AI stream %d (pipeid=%d)", 

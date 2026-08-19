@@ -80,6 +80,15 @@ static int avcc_to_annexb(const uint8_t* src, int len, uint8_t* dst, int dst_cap
     return di;
 }
 
+static void print_help(const char* program) {
+    printf("Usage: %s [-c config.json] -m <offline|stream> [-o output.h264]\n", program);
+    printf("  -c <file>           configuration JSON (default: config/streams_config.json)\n");
+    printf("  -m <offline|stream> offline writes H.264; stream pushes MediaMTX/RTP\n");
+    printf("  -o <file>           offline H.264 elementary-stream output (offline only)\n");
+    printf("  -h                  show this help\n");
+    printf("Input limitation: H.264 only; H.265/HEVC is unsupported.\n");
+}
+
 int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, __sigExit);
@@ -87,6 +96,8 @@ int main(int argc, char *argv[]) {
     int ret = 0;
     char input_source[256] = "test.h264";
     std::vector<std::string> input_sources;
+    std::string runMode = "stream";
+    std::string offlineOutputPath;
 
     // 命令行參數：MediaMTX 地址（優先級高於環境變量）
     std::string mediamtx_host_cmd;
@@ -100,6 +111,19 @@ int main(int argc, char *argv[]) {
     // 僅在端雲比對時推 raw：--enable-raw 為全部輸入源；--enable-raw 0,2 僅指定 0-based 輸入索引
     bool cli_enable_raw_all = false;
     std::set<size_t> cli_raw_source_indices;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_help(argv[0]);
+            return 0;
+        }
+        if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
+            runMode = argv[++i];
+            specialArgIndices.insert(i);
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            offlineOutputPath = argv[++i];
+            specialArgIndices.insert(i);
+        }
+    }
     for (int i = 1; i < argc; i++) {
         // 解析 -m 參數（模型配置）
         if (strncmp(argv[i], "-m", 2) == 0 && i + 1 < argc) {
@@ -248,6 +272,7 @@ int main(int argc, char *argv[]) {
         std::mutex latestMutex;
         std::condition_variable latestCv;
         std::atomic<bool> workerRunning;
+        std::atomic<bool> endOfStream;
         std::thread workerThread;
         std::atomic<uint64_t> lastFrameTime{0};  // 最後一次收到幀的時間（time_t），用於無幀診斷
         std::atomic<uint64_t> overwriteCount{0};
@@ -258,7 +283,7 @@ int main(int argc, char *argv[]) {
         std::atomic<uint64_t> avccConvertFailCount{0};
         std::atomic<uint64_t> avccConvertCostUs{0};
         std::atomic<uint64_t> metricsWindowStartMs{0};
-        DemuxCallbackData() : latestLen(0), hasLatestFrame(false), workerRunning(false) {
+        DemuxCallbackData() : latestLen(0), hasLatestFrame(false), workerRunning(false), endOfStream(false) {
             latestFrame.resize(256 * 1024);
         }
     };
@@ -282,7 +307,18 @@ int main(int argc, char *argv[]) {
             }
         }
         
-        if (!streamManager.loadStreamsFromConfig(streamsConfigPath, mediamtx_endpoint_for_config)) {
+        if (runMode != "offline" && runMode != "stream") {
+            ALOGE("Invalid mode '%s'; expected offline or stream", runMode.c_str());
+            ret = -1;
+            goto EXIT;
+        }
+        if (runMode == "offline" && offlineOutputPath.empty()) {
+            ALOGE("Offline mode requires -o <output.h264>");
+            ret = -1;
+            goto EXIT;
+        }
+        if (!streamManager.loadStreamsFromConfig(streamsConfigPath, mediamtx_endpoint_for_config,
+                                                 runMode == "offline", offlineOutputPath)) {
             ALOGE("Failed to load streams from config file");
             ret = -1;
             goto EXIT;
@@ -612,10 +648,17 @@ int main(int argc, char *argv[]) {
         
         // 定義無捕獲的 lambda（可以轉換為函數指針）
         VideoDemuxCallback callback = [](const void* buff, int len, void* reserve) {
-            if (len == 0 || gLoopExit) return;
-            auto cb_begin = std::chrono::steady_clock::now();
-            
             DemuxCallbackData* cbData = static_cast<DemuxCallbackData*>(reserve);
+            if (len == 0) {
+                if (cbData) {
+                    cbData->endOfStream.store(true);
+                    cbData->latestCv.notify_one();
+                }
+                return;
+            }
+            if (gLoopExit) return;
+            auto cb_begin = std::chrono::steady_clock::now();
+
             if (!cbData || !cbData->manager) return;
             cbData->lastFrameTime.store(static_cast<uint64_t>(time(nullptr)));
 
@@ -672,7 +715,7 @@ int main(int argc, char *argv[]) {
         
         ALOGN("[Main] Attempting to open input source %zu: %s", i, sourcesToOpen[i].c_str());
         // RTSP 不再在 demux 降幀（見 video_demux.hpp）；fps 僅用於本地檔/mp4 的 throttle
-        bool openResult = demux->Open(sourcesToOpen[i].c_str(), true, callback, cbData, 30.0);
+        bool openResult = demux->Open(sourcesToOpen[i].c_str(), runMode == "stream", callback, cbData, 30.0);
         if (openResult) {
             demuxes.push_back(demux);
             ALOGN("[Main] Successfully opened input source %zu: %s", i, sourcesToOpen[i].c_str());
@@ -703,6 +746,15 @@ int main(int argc, char *argv[]) {
     demuxWarned.resize(callbackDataList.size(), false);
     demuxCheckCounter = 0;
     while (!gLoopExit && !configService.isShutdownRequested()) {
+        if (runMode == "offline") {
+            bool allEnded = !callbackDataList.empty();
+            for (const auto* cbData : callbackDataList)
+                allEnded = allEnded && cbData->endOfStream.load();
+            if (allEnded) {
+                ALOGN("[Main] Offline input completed");
+                break;
+            }
+        }
         sleep(1);
         demuxCheckCounter++;
         time_t now_wall = time(nullptr);

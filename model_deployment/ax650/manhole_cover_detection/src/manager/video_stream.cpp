@@ -592,6 +592,11 @@ VideoStream::VideoStream(const StreamConfig& config)
         snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
                 "%s", config_.mediamtxEndpoint.c_str());
         pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
+    } else if (config_.isFileOutput) {
+        pipeline_.m_output_type = po_venc_h264;
+        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
+        snprintf(pipeline_.m_venc_attr.output_file, sizeof(pipeline_.m_venc_attr.output_file),
+                 "%s", config_.outputFilePath.c_str());
     } else if (config_.enableAI) {
         // AI推理输出为NV12缓冲区
         pipeline_.m_output_type = po_buff_nv12;
@@ -1099,6 +1104,13 @@ bool VideoStream::createProcessingPipeline() {
         pipeline_.m_venc_attr.n_venc_chn = config_.streamId;  // 使用 streamId 作為 VENC channel，避免衝突
         ALOGN("[VideoStream] Stream %d MediaMTX endpoint set to: %s", 
               config_.streamId, config_.mediamtxEndpoint.c_str());
+    } else if (config_.isFileOutput) {
+        pipeline_.m_output_type = po_venc_h264;
+        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
+        snprintf(pipeline_.m_venc_attr.output_file, sizeof(pipeline_.m_venc_attr.output_file),
+                 "%s", config_.outputFilePath.c_str());
+        ALOGN("[VideoStream] Stream %d offline H.264 output: %s",
+              config_.streamId, config_.outputFilePath.c_str());
     } else if (config_.enableAI) {
         // AI推理输出为NV12缓冲区
         pipeline_.m_output_type = po_buff_nv12;
@@ -1120,7 +1132,7 @@ bool VideoStream::createProcessingPipeline() {
     configureVDEC();
     // AI 流使用 po_buff_nv12，不需要 VENC
     // 只有 RTSP 和 MediaMTX 輸出才需要 VENC
-    if (config_.isRTSPOutput || config_.isMediaMTXOutput) {
+    if (config_.isRTSPOutput || config_.isMediaMTXOutput || config_.isFileOutput) {
         configureVENC();
     } else if (config_.enableAI) {
         // AI 流：確保不配置 VENC（使用 po_buff_nv12）
@@ -1215,23 +1227,14 @@ void VideoStream::configureVDEC() {
 
 void VideoStream::resolveInputCodecConfig() {
     std::string codec = toLowerCodec(config_.inputCodec);
-    if (codec.empty() || codec == "auto") {
-        preferredInputType_ = pi_vdec_h264;
-        autoCodecFallbackEnabled_ = true;
-        autoCodecFallbackSwitched_ = false;
-        return;
-    }
-
     autoCodecFallbackEnabled_ = false;
     autoCodecFallbackSwitched_ = false;
-    if (codec == "h265" || codec == "hevc") {
+    if (!codec.empty() && codec != "h264" && codec != "auto") {
         // 目前 pipeline_input_e 尚未提供 H265 對應輸入類型，先安全降級為 H264 避免編譯失敗。
-        ALOGW("[VideoStream] Stream %d input codec '%s' requested but H265 VDEC input type is unavailable, fallback to H264",
+        ALOGW("[VideoStream] Stream %d input codec '%s' is unsupported; only H264 is supported",
               config_.streamId, codec.c_str());
-        preferredInputType_ = pi_vdec_h264;
-    } else {
-        preferredInputType_ = pi_vdec_h264;
     }
+    preferredInputType_ = pi_vdec_h264;
 }
 
 bool VideoStream::tryAutoCodecFallbackLocked() {
@@ -1240,8 +1243,6 @@ bool VideoStream::tryAutoCodecFallbackLocked() {
     }
 
     // 目前不支援 H265 VDEC input type，保留狀態但不嘗試重建 pipeline。
-    ALOGW("[VideoStream] Stream %d input codec auto-fallback skipped: H265 VDEC input type is unavailable",
-          config_.streamId);
     autoCodecFallbackSwitched_ = true;
     return false;
 }

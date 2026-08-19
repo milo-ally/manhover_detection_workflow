@@ -26,7 +26,7 @@ struct StreamConfig {
     std::string pluginPath;
     std::string inputSource;
     // 輸入編碼：h264 / h265 / auto（預設）。auto 會先試 h264，連續失敗後自動切到 h265。
-    std::string inputCodec = "auto";
+    std::string inputCodec = "h264";
     bool enableAI = false;
     std::string modelPath;  // 單模型時使用；多模型時由 modelStages 覆蓋
     std::string modelName;  // 單模型時使用
@@ -41,6 +41,8 @@ struct StreamConfig {
     std::string rtspEndpoint = "axstream";
     bool isRTSPOutput = false;
     bool isMediaMTXOutput = false;
+    bool isFileOutput = false;
+    std::string outputFilePath;
     std::string mediamtxEndpoint = "127.0.0.1:8000";
     // （預留）可在需要时对 MediaMTX VENC channel 做映射/覆盖。
     // 多模型：同一流並行多模型或串行階段
@@ -101,6 +103,7 @@ public:
     bool isCommandLineModel() const { return config_.isCommandLineModel; }  // 檢查模型是否由命令行指定
     std::string getInputSource() const { return config_.inputSource; }
     bool isMediaMTXOutput() const { return config_.isMediaMTXOutput; }  // 檢查是否是推送到 MediaMTX 的流
+    bool isFileOutput() const { return config_.isFileOutput; }
     pipeline_t* getPipeline() { return &pipeline_; }  // 獲取pipeline指針，用於多流處理
     void setThresholds(float conf, float nms);
     /** 更新當前模型路徑（切換模型後必須調用，否則 getModelPath() 仍為舊值，導致後續切換被誤判為「無需重載」） */

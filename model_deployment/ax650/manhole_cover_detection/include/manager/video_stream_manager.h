@@ -67,7 +67,8 @@ public:
     
     // Load streams from JSON configuration file
     // mediamtxEndpoint: 可選的 MediaMTX 地址（IP:PORT 格式），如果為空則使用配置文件或環境變量
-    bool loadStreamsFromConfig(const std::string& configPath, const std::string& mediamtxEndpoint = "");
+    bool loadStreamsFromConfig(const std::string& configPath, const std::string& mediamtxEndpoint = "",
+                               bool offlineMode = false, const std::string& outputPath = "");
     
     // 參考 sample_multi_demux：更新 AI 檢測結果（由 AI 回調調用）
     void updateAIResult(int aiStreamId, const AI_RESULT_T* result);
