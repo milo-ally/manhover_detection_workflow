@@ -63,6 +63,8 @@ static uint8_t *preload(const char *path, ssize_t *data_size)
 static int read_callback(int64_t offset, void *buffer, size_t size, void *token)
 {
     INPUT_BUFFER *buf = (INPUT_BUFFER *)token;
+    if (size == 0)
+        return 0;
     if (!buf || !buffer || offset < 0 || static_cast<uint64_t>(offset) >= static_cast<uint64_t>(buf->size))
         return 1;
     const size_t available = static_cast<size_t>(buf->size - offset);
@@ -106,9 +108,11 @@ void pth_demux(Mp4DemuxerHandle *handle)
         int spspps_bytes;
         const void *spspps;
         MP4D_demux_t mp4 = {0};
-        if (MP4D_open(&mp4, read_callback, &buf, file_size) == 0 || mp4.track_count == 0 || !mp4.track)
+        const int open_ret = MP4D_open(&mp4, read_callback, &buf, file_size);
+        if (open_ret == 0 || mp4.track_count == 0 || !mp4.track)
         {
-            printf("Open MP4(%s) failed or contains no tracks.\n", handle->path.c_str());
+            printf("Open MP4(%s) failed or contains no tracks: ret=%d size=%d tracks=%u.\n",
+                   handle->path.c_str(), open_ret, file_size, mp4.track_count);
             MP4D_close(&mp4);
             return;
         }
@@ -120,6 +124,35 @@ void pth_demux(Mp4DemuxerHandle *handle)
         { // assume h264
 #define USE_SHORT_SYNC 0
             char sync[4] = {0, 0, 0, 1};
+            const bool is_hevc = (tr->object_type_indication == MP4_OBJECT_TYPE_HEVC);
+            const unsigned nal_length_size = (tr->dsi && tr->dsi_bytes > 21)
+                                                  ? ((tr->dsi[21] & 0x03u) + 1u)
+                                                  : 4u;
+            if (is_hevc && tr->dsi && tr->dsi_bytes >= 23) {
+                // Convert HEVCDecoderConfigurationRecord (hvcC) VPS/SPS/PPS
+                // arrays to Annex-B parameter-set NAL units for AX_VDEC.
+                size_t pos = 22;
+                const uint8_t num_arrays = tr->dsi[pos++];
+                for (uint8_t a = 0; a < num_arrays && pos + 3 <= tr->dsi_bytes; ++a) {
+                    const uint8_t nal_type = tr->dsi[pos++] & 0x3f;
+                    const uint16_t num_nalus = (uint16_t(tr->dsi[pos]) << 8) | tr->dsi[pos + 1];
+                    pos += 2;
+                    for (uint16_t n = 0; n < num_nalus && pos + 2 <= tr->dsi_bytes; ++n) {
+                        const uint16_t nal_bytes = (uint16_t(tr->dsi[pos]) << 8) | tr->dsi[pos + 1];
+                        pos += 2;
+                        if (pos + nal_bytes > tr->dsi_bytes) break;
+                        if (nal_type == HEVC_NAL_VPS || nal_type == HEVC_NAL_SPS || nal_type == HEVC_NAL_PPS) {
+                            handle->spspps_buffer.resize(size_t(nal_bytes) + 4);
+                            memcpy(handle->spspps_buffer.data(), sync, 4);
+                            memcpy(handle->spspps_buffer.data() + 4, tr->dsi + pos, nal_bytes);
+                            if (handle->cb)
+                                handle->cb(handle->spspps_buffer.data(), int(nal_bytes) + 4, ft_video, handle->reserve);
+                        }
+                        pos += nal_bytes;
+                    }
+                }
+            }
+            if (!is_hevc) {
             while ((spspps = MP4D_read_sps(&mp4, ntrack, i, &spspps_bytes)) && !handle->loopExit)
             {
                 // fwrite(sync + USE_SHORT_SYNC, 1, 4 - USE_SHORT_SYNC, fout);
@@ -156,6 +189,7 @@ void pth_demux(Mp4DemuxerHandle *handle)
                 }
                 i++;
             }
+            }
             for (i = 0; i < mp4.track[ntrack].sample_count && !handle->loopExit; i++)
             {
                 unsigned frame_bytes, timestamp, duration;
@@ -164,30 +198,36 @@ void pth_demux(Mp4DemuxerHandle *handle)
                 sum_duration += duration;
                 while (frame_bytes)
                 {
-                    uint32_t size = ((uint32_t)mem[0] << 24) | ((uint32_t)mem[1] << 16) | ((uint32_t)mem[2] << 8) | mem[3];
-                    size += 4;
-                    if (handle->cache.size() < size)
+                    if (frame_bytes < nal_length_size) {
+                        printf("error: demux sample has invalid NAL length\n");
+                        break;
+                    }
+                    uint32_t nal_size = 0;
+                    for (unsigned n = 0; n < nal_length_size; ++n)
+                        nal_size = (nal_size << 8) | mem[n];
+                    const uint32_t input_size = nal_size + nal_length_size;
+                    const uint32_t output_size = nal_size + 4;
+                    if (nal_size == 0 || input_size > frame_bytes) {
+                        printf("error: demux sample NAL size is invalid\n");
+                        break;
+                    }
+                    if (handle->cache.size() < output_size)
                     {
-                        handle->cache.resize(size);
+                        handle->cache.resize(output_size);
                     }
 
-                    memcpy(handle->cache.data(), mem, size);
+                    memcpy(handle->cache.data() + 4, mem + nal_length_size, nal_size);
                     handle->cache[0] = 0;
                     handle->cache[1] = 0;
                     handle->cache[2] = 0;
                     handle->cache[3] = 1;
                     if (handle->cb)
                     {
-                        handle->cb(handle->cache.data() + USE_SHORT_SYNC, size - USE_SHORT_SYNC, ft_video, handle->reserve);
+                        handle->cb(handle->cache.data(), output_size, ft_video, handle->reserve);
                     }
                     // fwrite(mem + USE_SHORT_SYNC, 1, size - USE_SHORT_SYNC, fout);
-                    if (frame_bytes < size)
-                    {
-                        printf("error: demux sample failed\n");
-                        exit(1);
-                    }
-                    frame_bytes -= size;
-                    mem += size;
+                    frame_bytes -= input_size;
+                    mem += input_size;
                 }
             }
         }
