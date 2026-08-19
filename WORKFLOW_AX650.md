@@ -14,6 +14,10 @@ AXModel 输入: images [1,640,640,3] U8 NHWC RGB
 输出解释:     0..3 为 cx/cy/w/h，4..8 为五个类别分数
 ```
 
+AX650 链路的转换/验证/部署文件统一使用 `yolo11s-manhole-detection`（ONNX 从
+`model_export` 复制时重命名，转换产物为 `yolo11s-manhole-detection.axmodel`）；
+`manhole-cover-yolo11s-production` 是训练/导出的模型名。
+
 仓库中的训练和导出脚本包含工作区绝对路径 `/home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow`。仓库移动到其他位置后，需要先修改 `model_train/` 和 `model_export/` 中的路径。
 
 平台目录不要混用：
@@ -116,13 +120,16 @@ model_export/runs/onnx-val/
 
 Pulsar2 4.0 下载地址：<https://huggingface.co/AXERA-TECH/Pulsar2/resolve/main/4.0/ax_pulsar2_4.0.tar.gz>
 
-当前转换工程已放在 `model_convert/ax650/`，其中包含 `ax_pulsar2_4.0.tar.gz`、`show.py`、`build.py`、`dataset/`、`models/` 和 `pulsar2_sim/`。
+当前转换工程已放在 `model_convert/ax650/`，其中包含 `show.py`、`build.py`、`cut.py` 和
+`models/`（含 `show.py` 生成的 `yolo11s-manhole-detection.onnx.json` 报告）。
+`ax_pulsar2_4.0.tar.gz`、`dataset/`、`pulsar2_sim/`、`output/` 均不提交 Git，需按
+`model_convert/ax650/SOP.md` 准备。
 
 ```bash
-cd /home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow/model_convert/ax650
+cd model_convert/ax650
 docker load -i ax_pulsar2_4.0.tar.gz
 docker image inspect pulsar2:4.0 --format '{{.RepoTags}} {{.Id}}'
-cp ../../model_export/model/manhole-cover-yolo11s-production.onnx models/
+cp ../../model_export/model/manhole-cover-yolo11s-production.onnx models/yolo11s-manhole-detection.onnx
 docker run -it --net host --rm \
   -v "$(pwd):/workflow" -w /workflow pulsar2:4.0
 ```
@@ -136,38 +143,40 @@ pulsar2 version
 
 ### 3.2 准备量化集
 
-当前工程已复制 72 张校准图片到 `model_convert/ax650/dataset/calib_images/`。量化集不能使用最终验证集，应覆盖五个类别及主要光照、距离、角度和背景。
+当前工程已复制 130 张校准图片到 `model_convert/ax650/dataset/calib_images/`（`dataset/`
+不提交 Git，需自行放置）。量化集不能使用最终验证集，应覆盖五个类别及主要光照、距离、
+角度和背景。
 
 ```bash
-tar -cf dataset/manhover.tar -C dataset/calib_images .
-tar -tf dataset/manhover.tar | grep -Ei '\.(jpg|jpeg|png)$' | wc -l
+tar -cf dataset/manhole_cover.tar -C dataset/calib_images .
+tar -tf dataset/manhole_cover.tar | grep -Ei '\.(jpg|jpeg|png)$' | wc -l
 ```
 
-数量应为 `72`。图片数量变化后，`--calibration_size` 必须同步修改。
+数量应为 `130`。图片数量变化后，`--calibration_size` 必须同步修改。
 
 ### 3.3 检查、生成配置并编译
 
 ```bash
 python show.py \
-  --onnx_model models/manhole-cover-yolo11s-production.onnx \
+  --onnx_model models/yolo11s-manhole-detection.onnx \
   --format json \
-  --output models/manhole-cover-yolo11s-production.onnx.json \
+  --output models/yolo11s-manhole-detection.onnx.json \
   --check
 
 python build.py \
-  --onnx_model models/manhole-cover-yolo11s-production.onnx \
-  --output_config config/manhole-cover-yolo11s-production.onnx.build_config.json \
-  --calibration_dataset ./dataset/manhover.tar \
-  --calibration_size 72 \
+  --onnx_model models/yolo11s-manhole-detection.onnx \
+  --output_config config/yolo11s-manhole-detection.onnx.build_config.json \
+  --calibration_dataset ./dataset/manhole_cover.tar \
+  --calibration_size 130 \
   --npu_mode NPU1 \
   --overwrite
 
-mkdir -p output/manhole-cover-yolo11s-production
+mkdir -p output/yolo11s-manhole-detection
 pulsar2 build \
-  --config config/manhole-cover-yolo11s-production.onnx.build_config.json \
-  --input models/manhole-cover-yolo11s-production.onnx \
-  --output_dir output/manhole-cover-yolo11s-production \
-  --output_name manhole-cover-yolo11s-production.axmodel \
+  --config config/yolo11s-manhole-detection.onnx.build_config.json \
+  --input models/yolo11s-manhole-detection.onnx \
+  --output_dir output/yolo11s-manhole-detection \
+  --output_name yolo11s-manhole-detection.axmodel \
   --target_hardware AX650 \
   --npu_mode NPU1 \
   --compiler.check 3 \
@@ -178,8 +187,8 @@ pulsar2 build \
 真实产物路径：
 
 ```text
-model_convert/ax650/output/manhole-cover-yolo11s-production/
-└── manhole-cover-yolo11s-production.axmodel
+model_convert/ax650/output/yolo11s-manhole-detection/
+└── yolo11s-manhole-detection.axmodel
 ```
 
 检查要求：Pulsar2 成功、输出无 NaN/Inf、余弦相似度不低于 `0.999`，并且 `output0 [1,9,8400]` 保持可用。
@@ -188,20 +197,23 @@ model_convert/ax650/output/manhole-cover-yolo11s-production/
 
 ## 4. Pulsar2 仿真
 
+`pulsar2_sim/` 不提交 Git（`cli_detect_manhover.py` 与 `sim_images/` 需按
+`model_convert/ax650/SOP.md` 恢复）：
+
 ```bash
 cd /workflow/pulsar2_sim
 mkdir -p models sim_inputs/1 sim_outputs
-cp ../output/manhole-cover-yolo11s-production/manhole-cover-yolo11s-production.axmodel models/
+cp ../output/yolo11s-manhole-detection/yolo11s-manhole-detection.axmodel models/
 echo 1 > list.txt
 
 python cli_detect_manhover.py \
   --pre_processing \
   --image_path sim_images/1.jpg \
-  --axmodel_path models/manhole-cover-yolo11s-production.axmodel \
+  --axmodel_path models/yolo11s-manhole-detection.axmodel \
   --intermediate_path sim_inputs/1
 
 pulsar2 run \
-  --model models/manhole-cover-yolo11s-production.axmodel \
+  --model models/yolo11s-manhole-detection.axmodel \
   --input_dir sim_inputs \
   --output_dir sim_outputs \
   --list list.txt
@@ -209,7 +221,7 @@ pulsar2 run \
 python cli_detect_manhover.py \
   --post_processing \
   --image_path sim_images/1.jpg \
-  --axmodel_path models/manhole-cover-yolo11s-production.axmodel \
+  --axmodel_path models/yolo11s-manhole-detection.axmodel \
   --intermediate_path sim_outputs/1 \
   --output_image 1_result.jpg \
   --conf_thres 0.25 \

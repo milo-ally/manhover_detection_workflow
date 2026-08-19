@@ -1,13 +1,13 @@
 # AX650N 模型转换 SOP
 
-案例：将 `models/manhole-cover-yolo11s-production.onnx` 转换为 `output/manhole-cover-yolo11s-production/manhole-cover-yolo11s-production.axmodel`。除容器启动外，命令均在容器中执行。
+案例：将 `models/yolo11s-manhole-detection.onnx` 转换为 `output/yolo11s-manhole-detection/yolo11s-manhole-detection.axmodel`。除容器启动外，命令均在容器中执行。
 
 ## 1. 启动容器
 
-宿主机 PowerShell：
+宿主机 PowerShell（注意 `cd` 必须进入 `model_convert/ax650`，使容器内的 `/workflow` 直接对应本目录，`show.py`、`models/`、`config/`、`dataset/` 才能被找到）：
 
 ```powershell
-cd C:\Users\lys6076\Desktop\workspace\LYG_workflow_1\model_convert
+cd C:\Users\lys6076\Desktop\workspace\LYG_workflow_1\model_convert\ax650
 docker load -i ax_pulsar2_4.0.tar.gz # 装载容器
 docker run -it --net host --rm -v "$(pwd):/workflow" -w /workflow pulsar2:4.0 # 进入容器并且将当前目录挂载到容器的/workflow目录下
 ```
@@ -22,7 +22,8 @@ pulsar2 version
 
 ## 2. 生成量化数据包
 
-量化图片必须是有代表性的业务图片，不使用验证集：
+量化图片必须是有代表性的业务图片，不使用验证集。`dataset/calib_images/` 不提交 Git
+（已被 .gitignore 忽略），使用前需自行放入校准图片：
 
 ```bash
 tar -cvf dataset/manhole_cover.tar -C dataset/calib_images .
@@ -82,6 +83,9 @@ python show.py --onnx_model models/yolo11s-manhole-detection.onnx --check
 
 ## 7. 仿真
 
+`pulsar2_sim/` 不提交 Git（`cli_detect_manhover.py`、`sim_images/` 需自行恢复；
+`models/`、`sim_inputs/`、`sim_outputs/` 为生成物）。预备：
+
 ```bash
 # 预备
 cd pulsar2_sim
@@ -109,4 +113,4 @@ python cli_detect_manhover.py --post_processing \
 
 ## 8. 质量验收
 
-必须满足：ONNX checker 通过、Pulsar2 成功、余弦相似度不低于 `0.999`、输出无 NaN/Inf。再使用 `../model_val` 的同一独立验证集分别计算 ONNX 与 AXModel 的 `mAP50`、`mAP50-95`，建议绝对下降不超过 `0.01`。最后在 AX650N 实板人工检查困难样本并连续推理至少 100 次。
+必须满足：ONNX checker 通过、Pulsar2 成功、余弦相似度不低于 `0.999`、输出无 NaN/Inf。再使用 `../../model_val/ax650` 的同一独立验证集分别计算 ONNX 与 AXModel 的 `mAP50`、`mAP50-95`，建议绝对下降不超过 `0.01`。最后在 AX650N 实板人工检查困难样本并连续推理至少 100 次。

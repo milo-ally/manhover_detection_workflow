@@ -78,7 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate Pulsar2 build configuration")
     parser.add_argument("--onnx_model", required=True, help="Input ONNX model")
     parser.add_argument("--output_config", default="config/build_config.json")
-    parser.add_argument("--calibration_dataset", default="./dataset/dataset_lyg_pose.tar")
+    parser.add_argument("--calibration_dataset", default="./dataset/manhole_cover.tar")
     parser.add_argument("--calibration_size", type=int, default=32)
     parser.add_argument("--npu_mode", default="NPU1")
     parser.add_argument("--output_tensors", nargs="+", help="Override ONNX graph outputs")

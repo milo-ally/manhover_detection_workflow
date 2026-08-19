@@ -79,7 +79,7 @@ rknn-toolkit2 commit: 59a913d172e7f5ff03c9076e2ec7b1b1288ffd08
 当前转换主机为 x86_64、Python 3.12：
 
 ```bash
-cd /home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow/model_convert/rk3588
+cd model_convert/rk3588
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt

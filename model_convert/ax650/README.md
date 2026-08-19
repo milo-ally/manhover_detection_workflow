@@ -15,14 +15,17 @@ classes    : good, broke, lose, uncovered, circle
 | `show.py` | 查看 ONNX I/O、节点和 Tensor，并运行 checker |
 | `build.py` | 根据 ONNX 实际 I/O 生成 `build_config.json` |
 | `cut.py` | 可选，按 Tensor 名裁切不兼容子图 |
-| `pulsar2_sim/cli_detect_manhover.py` | AXModel 仿真的 RGB 预处理与检测后处理 |
+| `pulsar2_sim/cli_detect_manhover.py` | AXModel 仿真的 RGB 预处理与检测后处理（目录不提交 Git，需自行恢复） |
 | `SOP.md` | 从容器启动到质量验收的完整案例 |
 
 模型和数据原件未随代码恢复。运行前放入：
 
 ```text
-models/best_sim.onnx
+models/yolo11s-manhole-detection.onnx
 dataset/calib_images/*.{jpg,jpeg,png}
 ```
+
+`models/yolo11s-manhole-detection.onnx.json` 是 `show.py` 生成并提交的 ONNX 结构报告；
+`dataset/`、`pulsar2_sim/`、`output/` 均不提交 Git，按 `SOP.md` 准备。
 
 然后从 `SOP.md` 第 1 步执行。
