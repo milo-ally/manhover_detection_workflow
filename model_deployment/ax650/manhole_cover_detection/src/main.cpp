@@ -13,6 +13,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <thread>
+#include <cstdio>
+#include <cctype>
 #include "manager/video_stream_manager.h" 
 #include "manager/config_service.h"
 #include "utilities/sample_log.h"  
@@ -89,6 +91,24 @@ static void print_help(const char* program) {
     printf("Input limitation: H.264 only; H.265/HEVC is unsupported.\n");
 }
 
+static bool has_suffix(const std::string& value, const char* suffix) {
+    if (!suffix || value.size() < strlen(suffix)) return false;
+    std::string a = value.substr(value.size() - strlen(suffix));
+    std::string b = suffix;
+    for (char& c : a) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    for (char& c : b) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    return a == b;
+}
+
+static std::string shell_quote(const std::string& value) {
+    std::string quoted = "'";
+    for (char c : value) {
+        if (c == '\'') quoted += "'\\''";
+        else quoted += c;
+    }
+    return quoted + "'";
+}
+
 int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, __sigExit);
@@ -98,6 +118,7 @@ int main(int argc, char *argv[]) {
     std::vector<std::string> input_sources;
     std::string runMode = "stream";
     std::string offlineOutputPath;
+    std::string offlineRawOutputPath;
 
     // 命令行參數：MediaMTX 地址（優先級高於環境變量）
     std::string mediamtx_host_cmd;
@@ -317,8 +338,13 @@ int main(int argc, char *argv[]) {
             ret = -1;
             goto EXIT;
         }
+        if (runMode == "offline") {
+            offlineRawOutputPath = has_suffix(offlineOutputPath, ".mp4")
+                ? offlineOutputPath + ".tmp.h264"
+                : offlineOutputPath;
+        }
         if (!streamManager.loadStreamsFromConfig(streamsConfigPath, mediamtx_endpoint_for_config,
-                                                 runMode == "offline", offlineOutputPath)) {
+                                                 runMode == "offline", offlineRawOutputPath)) {
             ALOGE("Failed to load streams from config file");
             ret = -1;
             goto EXIT;
@@ -823,6 +849,27 @@ int main(int argc, char *argv[]) {
         delete cbData;
     }
     callbackDataList.clear();
+
+    if (runMode == "offline") {
+        for (auto& stream : streamManager.getStreams()) {
+            stream.stop();
+        }
+        if (has_suffix(offlineOutputPath, ".mp4")) {
+            const std::string command =
+                "ffmpeg -y -f h264 -framerate 30 -i " + shell_quote(offlineRawOutputPath) +
+                " -c:v copy " + shell_quote(offlineOutputPath);
+            ALOGN("[Main] Muxing offline H.264 to MP4: %s", offlineOutputPath.c_str());
+            const int muxRet = std::system(command.c_str());
+            if (muxRet == 0) {
+                std::remove(offlineRawOutputPath.c_str());
+                ALOGN("[Main] Offline MP4 generated: %s", offlineOutputPath.c_str());
+            } else {
+                ALOGE("[Main] FFmpeg MP4 mux failed (%d); raw H.264 kept at %s",
+                      muxRet, offlineRawOutputPath.c_str());
+                ret = -1;
+            }
+        }
+    }
 
 EXIT:
     // 资源释放由RAII自动完成

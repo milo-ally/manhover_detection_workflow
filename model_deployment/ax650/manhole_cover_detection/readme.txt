@@ -16,9 +16,11 @@ streams configuration can be passed with -c.
 Input limitation: this demo supports H.264 only. H.265/HEVC input is not supported;
 convert the source video to H.264 before using offline inference.
 
-Offline video (writes an H.264 elementary stream with OSD overlays):
+Offline video (writes MP4 automatically when the output suffix is .mp4):
 
-    ./bin/demo -c config/streams_config.json -m offline -o output.h264
+    ./bin/demo -c config/streams_config.json -m offline -o output.mp4
+
+Use `-o output.h264` when a raw H.264 elementary stream is desired.
 
 Set input_source to a local file and output to the original MediaMTX/RTP
 configuration when validating an offline or board-side file source.
