@@ -230,8 +230,9 @@ bool RkEncoder::getHeader(std::vector<uint8_t>& header) {
     if (mpi_of(mpi_)->control(ctx_of(ctx_), MPP_ENC_GET_HDR_SYNC, &pkt) != MPP_OK || !pkt) {
         return false;
     }
-    const uint8_t* data = static_cast<const uint8_t*>(mpp_packet_get_data(pkt));
-    const size_t size = mpp_packet_get_size(pkt);
+    // 注意：用 get_pos/get_length（实际编码长度），不能用 get_size（缓冲区容量）
+    const uint8_t* data = static_cast<const uint8_t*>(mpp_packet_get_pos(pkt));
+    const size_t size = mpp_packet_get_length(pkt);
     if (data && size > 0) header.assign(data, data + size);
     mpp_packet_deinit(&pkt);
     return !header.empty();
@@ -269,8 +270,9 @@ bool RkEncoder::drainPackets() {
         MppPacket pkt = nullptr;
         MPP_RET ret = mpi_of(mpi_)->encode_get_packet(ctx_of(ctx_), &pkt);
         if (ret != MPP_OK || !pkt) break;
-        const uint8_t* data = static_cast<const uint8_t*>(mpp_packet_get_data(pkt));
-        const size_t size = mpp_packet_get_size(pkt);
+        // 用 get_pos/get_length（实际编码长度），不用 get_size（那是缓冲区容量，会写入垃圾）
+        const uint8_t* data = static_cast<const uint8_t*>(mpp_packet_get_pos(pkt));
+        const size_t size = mpp_packet_get_length(pkt);
         if (data && size > 0 && pktCb_) pktCb_(data, size);
         mpp_packet_deinit(&pkt);
     }
