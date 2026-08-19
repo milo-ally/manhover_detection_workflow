@@ -3,6 +3,7 @@
 #include <rk_mpi.h>
 #include <cstring>
 #include <cstdio>
+#include <ctime>
 
 #include <cstddef>
 #include <im2d.h>
@@ -48,19 +49,42 @@ bool RkDecoder::init() {
 
 bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
     if (!init_ || !data || size == 0) return false;
+
     MppPacket packet = nullptr;
     mpp_packet_init(&packet, const_cast<uint8_t*>(data), size);
-    MPP_RET ret = mpi_of(mpi_)->decode_put_packet(ctx_of(ctx_), packet);
+
+    // decode_put_packet 是异步接口。Buffer 满时返回 MPP_ERR_BUFFER_FULL(-1012)，
+    // 必须先 decode_get_frame 清空输出缓冲，再短暂等待（流水线还没出帧），然后重试。
+    const int kMaxRetry = 50;
+    MPP_RET ret = MPP_OK;
+    for (int attempt = 0; attempt < kMaxRetry; ++attempt) {
+        ret = mpi_of(mpi_)->decode_put_packet(ctx_of(ctx_), packet);
+        if (ret == MPP_OK) break;
+        if (ret == MPP_ERR_BUFFER_FULL || ret == MPP_ERR_DISPLAY_FULL) {
+            drainFrames();  // 清输出缓冲
+            // 短暂等待（如 1ms），让硬件流水线推进；累计约 2s 仍未成功则放弃
+            struct timespec ts = {0, 1 * 1000 * 1000};  // 1ms
+            nanosleep(&ts, nullptr);
+            continue;
+        }
+        break;  // 其他错误，重试无意义
+    }
     mpp_packet_deinit(&packet);
+
     if (ret != MPP_OK) {
-        fprintf(stderr, "[RkMedia] decode_put_packet failed ret=%d\n", ret);
+        static int errLogged = 0;
+        if (errLogged++ < 10) {
+            fprintf(stderr, "[RkMedia] decode_put_packet failed ret=%d (after %d attempts)\n",
+                    ret, kMaxRetry);
+        }
         return false;
     }
     return drainFrames();
 }
 
 bool RkDecoder::drainFrames() {
-    for (int i = 0; i < 8; ++i) {
+    // MPP 是多帧硬件流水线，一帧可能对应多个 packet，这里持续取满所有就绪帧
+    for (int i = 0; i < 32; ++i) {
         MppFrame frame = nullptr;
         MPP_RET ret = mpi_of(mpi_)->decode_get_frame(ctx_of(ctx_), &frame);
         if (ret != MPP_OK || !frame) break;
