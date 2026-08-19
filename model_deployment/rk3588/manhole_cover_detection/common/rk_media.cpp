@@ -64,6 +64,9 @@ bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
 
     MppPacket packet = nullptr;
     mpp_packet_init(&packet, const_cast<uint8_t*>(data), size);
+    static int putLog = 0;
+    if (putLog++ < 15)
+        fprintf(stderr, "[RkMedia] dec put pkt size=%zu\n", size);
 
     // decode_put_packet 是异步接口；buffer 满时返回 MPP_ERR_BUFFER_FULL(-1012)，
     // 需先 decode_get_frame 清空输出缓冲（含 info-change 处理），短暂等待后重试。
@@ -73,11 +76,15 @@ bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
         ret = mpi_of(mpi_)->decode_put_packet(ctx_of(ctx_), packet);
         if (ret == MPP_OK) break;
         if (ret == MPP_ERR_BUFFER_FULL || ret == MPP_ERR_DISPLAY_FULL) {
+            if (attempt < 5)
+                fprintf(stderr, "[RkMedia] dec put retry=%d ret=%d\n", attempt, ret);
             drainFrames();  // 处理 info-change + 清输出缓冲
             struct timespec ts = {0, 1 * 1000 * 1000};  // 1ms
             nanosleep(&ts, nullptr);
             continue;
         }
+        if (putLog++ < 15)
+            fprintf(stderr, "[RkMedia] dec put ret=%d\n", ret);
         break;  // 其他错误，重试无意义
     }
     mpp_packet_deinit(&packet);
@@ -92,10 +99,15 @@ bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
 }
 
 bool RkDecoder::drainFrames() {
+    static int drainLog = 0;
     for (int i = 0; i < 32; ++i) {
         MppFrame frame = nullptr;
         MPP_RET ret = mpi_of(mpi_)->decode_get_frame(ctx_of(ctx_), &frame);
-        if (ret != MPP_OK || !frame) break;
+        if (ret != MPP_OK || !frame) {
+            if (drainLog++ < 10)
+                fprintf(stderr, "[RkMedia] dec get ret=%d frame=%p\n", ret, (void*)frame);
+            break;
+        }
 
         const int w = static_cast<int>(mpp_frame_get_width(frame));
         const int h = static_cast<int>(mpp_frame_get_height(frame));
