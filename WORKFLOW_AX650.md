@@ -224,38 +224,42 @@ python cli_detect_manhover.py \
 
 ### 5.1 ONNX
 
+验证数据和模型目录约定见 `model_val/ax650/README.md`（图片在 `images/val/`、标签在
+`labels/val/`、模型在 `model/`，均不提交 Git，需自行放置）。
+
 ```bash
-cd /home/milo/workspace/LYG_manhover_detection_workflow/model_val/ax650
+cd model_val/ax650
 python3 -m venv .venv-onnx
 source .venv-onnx/bin/activate
 pip install -r requirements_onnx.txt
 python src_gpu/val_detect_manhover_onnx.py \
-  --onnx_model models/manhole-cover-yolo11s-production.onnx \
+  --onnx_model model/yolo11s-manhole-detection.onnx \
   --data data_gpu.yaml \
   --provider auto \
   --conf-thres 0.001 \
   --iou-thres 0.7 \
   --max-det 300 \
-  --metrics-json runs/manhole-cover-yolo11s-production_onnx_metrics.json
+  --metrics-json runs/yolo11s-manhole-detection_onnx_metrics.json
 ```
 
 当前已实际得到：`mAP50=0.7397`，`mAP50-95=0.3838`（11 张图片、19 个目标）。`conf=0.001` 用于指标验收，人工查看可使用 `conf=0.25`。
 
 ### 5.2 AXModel 板端
 
-将 `model_val/ax650/` 完整复制到 AX650N，安装本目录提供的 `axengine-0.1.3-py3-none-any.whl` 和 `requirements_npu.txt`：
+将 `model_val/ax650/` 完整复制到 AX650N，安装本目录提供的 `axengine-0.1.3-py3-none-any.whl`
+（wheel 不提交 Git，需自行放到本目录）和 `requirements_npu.txt`：
 
 ```bash
 cd model_val/ax650
 pip3 install ./axengine-0.1.3-py3-none-any.whl
 pip3 install -r requirements_npu.txt
 python3 src_npu/val_detect_manhover_npu.py \
-  --axmodel models/manhole-cover-yolo11s-production.axmodel \
+  --axmodel model/yolo11s-manhole-detection.axmodel \
   --data data_npu.yaml \
   --conf-thres 0.001 \
   --iou-thres 0.7 \
   --max-det 300 \
-  --metrics-json runs/manhole-cover-yolo11s-production_axmodel_metrics.json
+  --metrics-json runs/yolo11s-manhole-detection_axmodel_metrics.json
 ```
 
 最终比较 ONNX 与 AXModel 的 mAP50、mAP50-95，建议绝对下降不超过 `0.01`；同时检查困难样本、平均/P95 延迟、峰值内存，并连续推理至少 100 次。

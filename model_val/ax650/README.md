@@ -11,15 +11,21 @@ AXModel 输入 images [1,640,640,3] U8 NHWC RGB
 
 ## 1. 准备文件
 
-使用未参与训练和量化校准的业务验证集：
+使用未参与训练和量化校准的业务验证集，目录约定以 `data_gpu.yaml` / `data_npu.yaml`
+为准（`val: images/val`、`labels: labels/val`）：
 
 ```
-model_val/
-  images/00001.jpg
-  labels/00001.txt
+model_val/ax650/
+  images/val/00001.jpg
+  labels/val/00001.txt
   model/yolo11s-manhole-detection.onnx
   model/yolo11s-manhole-detection.axmodel
 ```
+
+注意：`images/`、`labels/`、`model/`、`runs/` 以及 `axengine-*.whl` 均不提交 Git
+（已被 `.gitignore` 忽略），使用前需要按上述目录约定自行放置：验证图放 `images/val/`、
+标签放 `labels/val/`（与图片同名 `.txt`）、模型放 `model/`，`axengine` wheel 放本目录
+`./axengine-0.1.3-py3-none-any.whl`。
 
 每行标签为归一化 YOLO 检测格式：
 
@@ -40,7 +46,7 @@ docker run -it --net host --rm -v "${PWD}:/workflow" pulsar2:4.0
 进入容器后执行基础命令（原有逻辑，不生成指标 json）：
 
 ```
-cd /workflow/model_val
+cd /workflow/model_val/ax650
 python src_gpu/val_detect_manhover_onnx.py \
   --onnx_model model/yolo11s-manhole-detection.onnx \
   --data data_gpu.yaml \
@@ -53,12 +59,12 @@ python src_gpu/val_detect_manhover_onnx.py \
   --image-dir runs/yolo11s-manhole-detection_onnx_images
 ```
 
-新增可选参数 `--metrics‑json`，用于输出结构化指标 json 文件，不传该参数不会产生额外文件，原有行为完全不变。
+新增可选参数 `--metrics-json`，用于输出结构化指标 json 文件，不传该参数不会产生额外文件，原有行为完全不变。
 
-带 metrics‑json 参数完整运行示例：
+带 metrics-json 参数完整运行示例：
 
 ```
-cd /workflow/model_val
+cd /workflow/model_val/ax650
 python src_gpu/val_detect_manhover_onnx.py \
   --onnx_model model/yolo11s-manhole-detection.onnx \
   --data data_gpu.yaml \
@@ -81,7 +87,7 @@ python src_gpu/val_detect_manhover_onnx.py \
 基础运行命令：
 
 ```
-cd /workflow/model_val
+cd /workflow/model_val/ax650
 pip3 install ./axengine-0.1.3-py3-none-any.whl
 python3 src_npu/val_detect_manhover_npu.py \
   --axmodel model/yolo11s-manhole-detection.axmodel \
@@ -94,10 +100,10 @@ python3 src_npu/val_detect_manhover_npu.py \
   --image-dir runs/yolo11s-manhole-detection_axmodel_images
 ```
 
-同样支持可选参数 `--metrics‑json`，板端完整示例：
+同样支持可选参数 `--metrics-json`，板端完整示例：
 
 ```
-cd /workflow/model_val
+cd /workflow/model_val/ax650
 pip3 install ./axengine-0.1.3-py3-none-any.whl
 python3 src_npu/val_detect_manhover_npu.py \
   --axmodel model/yolo11s-manhole-detection.axmodel \
@@ -111,11 +117,11 @@ python3 src_npu/val_detect_manhover_npu.py \
   --metrics-json runs/yolo11s-manhole-detection_axmodel_metrics.json
 ```
 
-两边必须使用同一份 `images/`、`labels/` 和默认的 `--conf-thres 0.001 --iou-thres 0.7 --max-det 300`。
+两边必须使用同一份 `images/val/`、`labels/val/` 和默认的 `--conf-thres 0.001 --iou-thres 0.7 --max-det 300`。
 
 验证时终端会逐张输出标注数和检测数，`*_predictions.jsonl` 每行保存一张图片的类别、置信度和 `xyxy` 检测框，`*_images/` 保存完成后处理并绘制检测框的结果图片。
 
-当传入`--metrics‑json`，会额外输出 json 文件，内部包含 mAP50、mAP50‑95、Precision、Recall 的全局汇总指标。
+当传入`--metrics-json`，会额外输出 json 文件，内部包含 mAP50、mAP50-95、Precision、Recall 的全局汇总指标。
 
 ## 4. 查看后处理结果图片
 
@@ -127,7 +133,7 @@ python3 src_npu/val_detect_manhover_npu.py \
 
 `src_gpu` 和 `src_npu` 仅保留当前 5 类检测模型的验证入口。
 
-### metrics‑json 输出格式示例
+### metrics-json 输出格式示例
 
 ```
 {
@@ -146,7 +152,7 @@ python3 src_npu/val_detect_manhover_npu.py \
 
 ## 考核使用提示
 
-1. 运行脚本时带上`--metrics‑json`参数，分别得到 ONNX 与 AXModel 两份 metrics json 文件。
+1. 运行脚本时带上`--metrics-json`参数，分别得到 ONNX 与 AXModel 两份 metrics json 文件。
 2. 可以自行编写简短小脚本读取两份 json，直接生成 markdown 对比表格复制粘贴进 model_convert_shturl。
 3. txt 评估报告依旧保留，截图放到 evidence 文件夹作为提交证据。
 4. validation_common.py 全程未做任何修改，维持仓库原始版本。

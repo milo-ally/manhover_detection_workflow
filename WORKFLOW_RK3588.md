@@ -138,10 +138,10 @@ cp output/manhole-cover-yolo11s-production.rknn \
 
 ### 3.1 主机 ONNX 基线
 
-验证数据是 `model_val/rk3588/images/` 和 `model_val/rk3588/labels/` 的本地副本，ONNX 也位于 `model_val/rk3588/models/`。
+验证数据是 `model_val/rk3588/images/` 和 `model_val/rk3588/labels/` 的本地副本，ONNX 也位于 `model_val/rk3588/models/`（`images/`、`labels/`、`models/` 均不提交 Git，需按 `model_val/rk3588/SOP.md` 放置）。
 
 ```bash
-cd /home/milo/workspace/LYG_Internship/Code/LYG_manhover_detection_workflow/model_val/rk3588
+cd model_val/rk3588
 ../../model_convert/rk3588/.venv/bin/python \
   src/val_detect_manhole_onnx.py \
   --onnx models/manhole-cover-yolo11s-production.onnx \
@@ -158,7 +158,7 @@ mAP50-95: 0.3838
 
 ### 3.2 RKNN Lite 板端验证
 
-板端需要 Python、与 Python 版本匹配的 `rknn_toolkit_lite2` wheel 和 `requirements_rknn.txt`。本目录的 Lite wheel 来自官方 Toolkit2 2.3.2，aarch64 文件位于 `model_val/rk3588/packages/`。
+板端需要 Python、与 Python 版本匹配的 `rknn_toolkit_lite2` wheel 和 `requirements_rknn.txt`。本工程使用的 Lite wheel 来自官方 Toolkit2 2.3.2，aarch64 文件位于 `model_val/rk3588/packages/`（不提交 Git，需自行放置）。
 
 将整个 `model_val/rk3588/` 复制到 RK3588 板端后执行：
 

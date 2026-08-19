@@ -2,7 +2,8 @@
 
 ## 1. 准备模型
 
-本目录已准备好真实转换产物：
+模型文件不提交 Git（`.gitignore` 忽略 `models/*`），使用前需要把转换产物复制到本目录
+`models/`（转换见 `model_convert/rk3588`，验证数据 `images/`、`labels/` 同样不提交）：
 
 ```bash
 ls -lh models/manhole-cover-yolo11s-production.rknn
