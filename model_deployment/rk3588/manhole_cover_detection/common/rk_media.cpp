@@ -179,6 +179,14 @@ bool RkEncoder::init(int width, int height, int stride, int fps, int bitrateKbps
 
     MppEncCfg cfg = nullptr;
     mpp_enc_cfg_init(&cfg);
+    // 官方 mpi_enc_test：必须先 GET_CFG 取默认配置（否则未设字段是垃圾值，SET 会失败），
+    // 再修改字段，最后 SET_CFG。
+    if (mpi->control(ctx, MPP_ENC_GET_CFG, cfg) != MPP_OK) {
+        fprintf(stderr, "[RkMedia] MPP_ENC_GET_CFG failed\n");
+        mpp_enc_cfg_deinit(cfg);
+        mpp_destroy(ctx);
+        return false;
+    }
     mpp_enc_cfg_set_s32(cfg, "prep:width", width);
     mpp_enc_cfg_set_s32(cfg, "prep:height", height);
     mpp_enc_cfg_set_s32(cfg, "prep:hor_stride", stride);
@@ -193,7 +201,8 @@ bool RkEncoder::init(int width, int height, int stride, int fps, int bitrateKbps
     mpp_enc_cfg_set_s32(cfg, "codec:gop", fps * 2);
     mpp_enc_cfg_set_s32(cfg, "codec:fps", fps);
     mpp_enc_cfg_set_s32(cfg, "codec:fps_in_flex", 0);
-    mpp_enc_cfg_set_s32(cfg, "codec:header_mode", MPP_ENC_HEADER_MODE_EACH_IDR);
+    // 用 DEFAULT（而非 EACH_IDR）：SPS/PPS 由 MPP_ENC_GET_HDR_SYNC 单独取，更稳
+    mpp_enc_cfg_set_s32(cfg, "codec:header_mode", MPP_ENC_HEADER_MODE_DEFAULT);
 
     if (mpi->control(ctx, MPP_ENC_SET_CFG, cfg) != MPP_OK) {
         fprintf(stderr, "[RkMedia] MPP_ENC_SET_CFG failed\n");
