@@ -226,15 +226,26 @@ bool RkEncoder::init(int width, int height, int stride, int fps, int bitrateKbps
 bool RkEncoder::getHeader(std::vector<uint8_t>& header) {
     header.clear();
     if (!init_) return false;
+
+    // 官方 mpi_enc_test：先创建一个带 buffer 的 packet，再 control(MPP_ENC_GET_HDR_SYNC, packet)
+    // （参数是 packet 本身，不是 &packet）。取到 SPS/PPS 写进 header。
+    MppBuffer buf = nullptr;
+    if (mpp_buffer_get(nullptr, &buf, 1024 * 1024) != MPP_OK) return false;
     MppPacket pkt = nullptr;
-    if (mpi_of(mpi_)->control(ctx_of(ctx_), MPP_ENC_GET_HDR_SYNC, &pkt) != MPP_OK || !pkt) {
+    if (mpp_packet_init_with_buffer(&pkt, buf) != MPP_OK) {
+        mpp_buffer_put(buf);
         return false;
     }
-    // 注意：用 get_pos/get_length（实际编码长度），不能用 get_size（缓冲区容量）
-    const uint8_t* data = static_cast<const uint8_t*>(mpp_packet_get_pos(pkt));
-    const size_t size = mpp_packet_get_length(pkt);
-    if (data && size > 0) header.assign(data, data + size);
+    mpp_packet_set_length(pkt, 0);
+
+    MPP_RET ret = mpi_of(mpi_)->control(ctx_of(ctx_), MPP_ENC_GET_HDR_SYNC, pkt);
+    if (ret == MPP_OK) {
+        const uint8_t* data = static_cast<const uint8_t*>(mpp_packet_get_pos(pkt));
+        const size_t size = mpp_packet_get_length(pkt);
+        if (data && size > 0) header.assign(data, data + size);
+    }
     mpp_packet_deinit(&pkt);
+    mpp_buffer_put(buf);
     return !header.empty();
 }
 
