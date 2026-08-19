@@ -15,6 +15,7 @@ enum class AIPipelineMode {
 struct ModelStageConfig {
     std::string modelPath;
     std::string modelName;
+    std::string pluginPath;
     float confThreshold = 0.45f;
     float nmsThreshold = 0.45f;
     bool roiFromPrevious = false;  // 串行時：是否基於前一階段檢測框裁剪 ROI 再推理

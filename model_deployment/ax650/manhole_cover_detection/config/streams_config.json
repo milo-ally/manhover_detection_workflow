@@ -2,7 +2,7 @@
   "streams": [
     {
       "stream_id": 1,
-      "input_source": "../test.mp4",
+      "input_source": "/root/kaohe_6076/test.mp4",
       "conf_thres": 0.25,
       "nms_thres": 0.45,
       "output_width": 1920,
@@ -22,4 +22,3 @@
     }
   ]
 }
-

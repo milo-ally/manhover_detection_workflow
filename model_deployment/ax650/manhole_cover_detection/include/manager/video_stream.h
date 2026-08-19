@@ -23,6 +23,7 @@ class InferenceManager;
 // Stream configuration parameters
 struct StreamConfig {
     int streamId;
+    std::string pluginPath;
     std::string inputSource;
     // 輸入編碼：h264 / h265 / auto（預設）。auto 會先試 h264，連續失敗後自動切到 h265。
     std::string inputCodec = "auto";

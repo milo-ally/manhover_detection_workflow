@@ -82,7 +82,14 @@ bool AIProcessor::loadModel(const std::string& modelPath, const std::string& mod
     }
 
     // 檢查模型文件是否存在（人員聚集插件會自行 fallback 到人員偵測模型，故跳過檢查）
-    pluginPath = "./libmanhole_plugin.so";
+    // Configuration takes precedence; keep the manhole plugin as the default.
+    if (modelParams_.contains("plugin") && modelParams_["plugin"].is_string() &&
+        !modelParams_["plugin"].get<std::string>().empty()) {
+        pluginPath = modelParams_["plugin"].get<std::string>();
+    } else {
+        pluginPath = "./libmanhole_plugin.so";
+    }
+    ALOGN("[AIProcessor] Loading plugin: %s", pluginPath.c_str());
     const bool isCrowdPlugin = false;
     if (!isCrowdPlugin) {
         std::ifstream test_file(modelPath);

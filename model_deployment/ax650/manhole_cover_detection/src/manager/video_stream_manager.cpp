@@ -109,6 +109,8 @@ void VideoStreamManager::addStream(const StreamConfig& config) {
                 }
                 if (fullPath.empty()) continue;
                 nlohmann::json effParams = stage.params.is_object() ? stage.params : nlohmann::json::object();
+                if (!stage.pluginPath.empty() && !effParams.contains("plugin"))
+                    effParams["plugin"] = stage.pluginPath;
                 if (!effParams.contains("conf_threshold")) effParams["conf_threshold"] = stage.confThreshold;
                 if (!effParams.contains("nms_threshold")) effParams["nms_threshold"] = stage.nmsThreshold;
                 std::unique_ptr<AIProcessor> p = std::make_unique<AIProcessor>(fullPath, stage.modelName, effParams);
@@ -130,6 +132,7 @@ void VideoStreamManager::addStream(const StreamConfig& config) {
             if (!fullModelPath.empty()) {
                 ALOGN("[VideoStreamManager] Creating AIProcessor for stream %d...", config.streamId);
                 nlohmann::json effParams = nlohmann::json::object();
+                if (!config.pluginPath.empty()) effParams["plugin"] = config.pluginPath;
                 effParams["conf_threshold"] = config.confThreshold;
                 effParams["nms_threshold"] = config.nmsThreshold;
                 newStream.setAIProcessor(std::make_unique<AIProcessor>(fullModelPath, config.modelName, effParams));
@@ -476,6 +479,8 @@ void VideoStreamManager::updateAIStreamWithStages(int streamId, const std::vecto
     for (const auto& stage : stages) {
         if (stage.modelPath.empty() || stage.modelPath == "none") continue;
         nlohmann::json effParams = stage.params.is_object() ? stage.params : nlohmann::json::object();
+        if (!stage.pluginPath.empty() && !effParams.contains("plugin"))
+            effParams["plugin"] = stage.pluginPath;
         if (!effParams.contains("conf_threshold")) effParams["conf_threshold"] = stage.confThreshold;
         if (!effParams.contains("nms_threshold")) effParams["nms_threshold"] = stage.nmsThreshold;
         std::unique_ptr<AIProcessor> p = std::make_unique<AIProcessor>(stage.modelPath, stage.modelName, effParams);
@@ -867,6 +872,8 @@ bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath, co
                 aiConfig.ivpsGroup = aiIvpsGroup;
                 aiConfig.vdecGroup = mainVdecGroup;  // 與主碼流共用 VDEC 組（相同輸入源）
                 aiConfig.enableAI = true;
+                if (streamConfig.contains("plugin") && streamConfig["plugin"].is_string())
+                    aiConfig.pluginPath = streamConfig["plugin"];
                 
                 // 模型配置：支援多模型（並行）或串行階段（models 數組可含 roi_from_previous）
                 bool modelConfigured = false;
@@ -877,6 +884,10 @@ bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath, co
                     for (const auto& modelEl : streamConfig["models"]) {
                         ModelStageConfig stage;
                         if (modelEl.contains("name")) stage.modelName = modelEl["name"];
+                        if (modelEl.contains("plugin") && modelEl["plugin"].is_string())
+                            stage.pluginPath = modelEl["plugin"];
+                        else if (streamConfig.contains("plugin") && streamConfig["plugin"].is_string())
+                            stage.pluginPath = streamConfig["plugin"];
                         if (modelEl.contains("path") && !modelEl["path"].is_null()) {
                             stage.modelPath = modelEl["path"];
                             if (stage.modelPath.find("/") == std::string::npos || stage.modelPath.find("../") == 0) {
