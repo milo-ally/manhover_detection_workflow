@@ -258,8 +258,19 @@ bool VideoStreamManager::loadStreamsFromConfig(const std::string& configPath,
                   scMain.streamId, scMain.outputFilePath.c_str());
         } else {
             scMain.isMediaMTXOutput = true;
-            ALOGN("[VideoStreamManager] Main stream %d: RTP -> MediaMTX %s:%s",
-                  scMain.streamId, mediamtxHost.c_str(), mediamtxPort.c_str());
+            // stream 模式：MPP 编码 -> ffmpeg -c copy -> RTSP 发布到 MediaMTX。
+            // RTSP URL 默认 rtsp://<host>:8554/ai_out（可被配置 rtsp_output_url / --mediamtx 覆盖）。
+            std::string rtspUrl;
+            if (streamConfig.contains("rtsp_output_url") &&
+                streamConfig["rtsp_output_url"].is_string()) {
+                rtspUrl = streamConfig["rtsp_output_url"].get<std::string>();
+            } else {
+                std::string mtxHost = mediamtxHost.empty() ? "127.0.0.1" : mediamtxHost;
+                rtspUrl = "rtsp://" + mtxHost + ":8554/ai_out";
+            }
+            scMain.rtspOutputUrl = rtspUrl;
+            ALOGN("[VideoStreamManager] Main stream %d: stream -> RTSP %s (MediaMTX %s:%s)",
+                  scMain.streamId, rtspUrl.c_str(), mediamtxHost.c_str(), mediamtxPort.c_str());
         }
 
         // --- AI 流（推理流：broker -> RGA 640 -> RKNN -> SharedAIResult）---

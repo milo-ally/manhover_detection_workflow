@@ -17,8 +17,8 @@ RKNN output    output0 [1,9,8400] FP32（want_float=1）
 
 工程与 AX650 板端工程（`model_deployment/ax650/manhole_cover_detection`）**架构完全同构**：
 类名/方法名一致、`streams_config.json` 字段一致、CLI 一致、插件 ABI 一致；仅底层硬件实现
-不同——AX650 走 VDEC/IVPS/VENC 硬件流水线，RK3588 用 OpenCV 解码 + FFmpeg
-`h264_rkmpp` 输出 + RKNN 推理。
+不同——AX650 走 VDEC/IVPS/VENC 硬件流水线，RK3588 用 MPP 硬件解码/编码 + RGA/OpenCV
+缩放画框 + RKNN 推理，输出 RTSP（ffmpeg -c copy）到 MediaMTX。
 
 ## 1. 前置工作和交付信息
 
@@ -111,12 +111,12 @@ RkDecoder（MPP mpi_dec，H.264→NV12）◄────── 对应 AX650 VDEC
  RkEncoder（MPP mpi_enc）           （对应 AX650 OSDAssociatedModel）
    │  （对应 AX650 VENC）            │
    ▼                                │
- rtp_pusher → MediaMTX(RTP)  ◄──────┘（主码流编码线程读取，跨流叠加画框）
+ ffmpeg -c copy → RTSP → MediaMTX  ◄──┘（主码流编码线程读取，跨流叠加画框）
  或离线 raw H.264 文件 + ffmpeg 封装 MP4
 ```
 
 要点：与 AX650 完全一致，**每路输入拆主码流 + AI 流两条流水线**——主码流负责
-`解封装→MPP 解码→RGA 缩放→画框→MPP 编码→RTP/文件`，AI 流负责
+`解封装→MPP 解码→RGA 缩放→画框→MPP 编码→RTSP(ffmpeg -c copy)/文件`，AI 流负责
 `RGA 640→RKNN 推理→SharedAIResult`；OSD 通过主码流编码线程拉取 AI 结果并 CPU 画框
 （IVPS OSD region 的降级实现），主码流与 AI 流共享解码帧（FrameBroker，latest-frame
 语义，对应 AX650 共享 VDEC 组）。
@@ -136,8 +136,9 @@ src/manager/video_stream_manager.cpp
    根据配置创建多路 VideoStream；OSDAssociatedModel/initializeOSDForAIStream 与 ax650 一致
 
 src/manager/video_stream.cpp
-   OpenCV 解码 -> AIProcessor/InferenceManager 推理 -> OSDRenderer 画框
-   -> OpenCV MP4（offline）或 FFmpeg h264_rkmpp RTSP（stream）
+   每路输入拆两条流：主码流 H264Demux -> MPP 解码 -> RGA -> CPU 画框 -> MPP 编码
+   -> ffmpeg -c copy RTSP（stream）/ raw 文件（offline）
+   AI 流：FrameBroker 取帧 -> RGA 640 -> 推理 -> SharedAIResult
 
 src/manager/ai_processor.cpp
    根据配置的 plugin 字段或默认 ./libmanhole_plugin.so 选择插件
@@ -355,7 +356,7 @@ FFmpeg 开发库（libavformat/libavcodec/libavutil）与 OpenCV core/imgproc
 models/manhole-cover-yolo11s-production.rknn 已放置（模型不提交 Git）
 ```
 
-在线模式（RTSP/文件输入，h264_rkmpp 推流到 MediaMTX）：
+在线模式（RTSP/文件输入，MPP 编码 + ffmpeg -c copy 推 RTSP 到 MediaMTX）：
 
 ```bash
 cd model_deployment/rk3588/manhole_cover_detection/bin
@@ -389,8 +390,8 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ### 6.1 离线模式（-m offline）
 
 ```text
-本地视频 -> OpenCV 解码 -> AI 插件推理（RKNN）-> CPU 画框
-   -> OpenCV VideoWriter（mp4v）-> MP4
+本地视频 -> H264Demux -> MPP 解码 -> RGA 缩放/格式转换 -> AI 插件推理（RKNN）-> CPU 画框
+   -> MPP 编码 -> raw H.264 -> ffmpeg 封装 MP4
 ```
 
 用于先确认模型、预处理、后处理和画框正确，不需要 MediaMTX。
@@ -398,22 +399,24 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ### 6.2 在线模式（-m stream）
 
 ```text
-RTSP/文件输入 -> OpenCV 解码 -> AI 插件推理 -> CPU 画框
-   -> FFmpeg h264_rkmpp 管道 -> RTSP -> MediaMTX（默认 rtsp://127.0.0.1:8554/ai_out）
+RTSP/文件输入 -> H264Demux -> MPP 解码 -> RGA 缩放/格式转换 -> CPU 画框
+   -> MPP 编码 -> ffmpeg -c copy -> RTSP -> MediaMTX（默认 rtsp://127.0.0.1:8554/ai_out）
 ```
 
-输出走板端 FFmpeg `h264_rkmpp` 硬件编码，RTSP 地址默认 `ai_out`，多路时自动加流号，
-可在配置 `rtsp_output_url` 覆盖。不要把 AX650 文档中的 VENC/RTP 命令复制到这里。
+输出走板端 MPP 硬件编码，再由 `ffmpeg -c copy` 直接封装 RTSP 发布到板端 MediaMTX
+（RTSP publisher 机制，v1.10.0 可用），RTSP 地址默认 `rtsp://<host>:8554/ai_out`，
+可用配置 `rtsp_output_url` 覆盖。不要把 AX650 文档中的 VENC/RTP 命令复制到这里。
 
 ## 7. 检测框和 OSD 显示说明
 
 井盖插件本身不直接在视频帧上画框。它在 `Inference()` 中完成推理和后处理，将检测结果
 写入 `AI_RESULT_T`，包括归一化的 `x/y/w/h`、类别和置信度。
 
-RK3588 上画框由 `VideoStream::runLoop()` 内联完成：推理返回后调用
-`OSDRenderer::update`，由 `DefaultOSDRenderer`（`IOSDRenderer` 默认实现）把框、类别名、
-置信度直接用 OpenCV 绘制到**即将编码输出的 BGR 帧**上。井盖模型当前没有专用 OSD
-Renderer（`AIProcessor::getOSDRenderer()` 返回 nullptr），使用通用 `DefaultOSDRenderer`。
+RK3588 上画框由主码流 `VideoStream::onDecodedFrame` 内联完成：MPP 解码帧经 RGA 缩放/
+转 BGR 后调用 `OSDRenderer::update`，由 `DefaultOSDRenderer`（`IOSDRenderer` 默认实现）
+把框、类别名、置信度直接用 OpenCV 绘制到**即将编码输出的 BGR 帧**上。井盖模型当前
+没有专用 OSD Renderer（`AIProcessor::getOSDRenderer()` 返回 nullptr），使用通用
+`DefaultOSDRenderer`。
 
 ```text
 输入帧
@@ -481,7 +484,7 @@ cannot open output video
 1. 确认查看的是 MediaMTX 输出流（ai_out），而不是原始输入流（src_in）
 2. 确认 AI_RESULT_T.nObjSize > 0，排除当前画面确实没有达到阈值的目标
 3. 确认模型路径、插件路径和 LD_LIBRARY_PATH 正确
-4. 确认 ffmpeg h264_rkmpp 编码器可用且管道未提前退出
+4. 确认 ffmpeg RTSP 推流子进程未提前退出（板端有 ffmpeg 且能连上 MediaMTX RTSP）
 ```
 
 ## 9. 最短 SOP
@@ -508,7 +511,8 @@ src/manager/ai_processor.cpp
   applyModelParamsToEnv(): 将 conf_threshold/nms_threshold 写入 MANHOLE_*/MODEL_* 环境变量。
 
 src/manager/video_stream.cpp
-  runLoop(): OpenCV 解码 -> 推理 -> OSDRenderer 画框 -> MP4 / h264_rkmpp RTSP 输出。
+  mainLoop/onDecodedFrame：H264Demux -> MPP 解码 -> RGA 缩放/转BGR -> OSDRenderer 画框
+  -> RGA 转NV12 -> MPP 编码 -> ffmpeg -c copy RTSP（stream）/ raw 文件（offline）。
 
 src/manager/config_service.cpp
   getModelPath(): 非路径模型名统一映射到 ../models/manhole-cover-yolo11s-production.rknn。

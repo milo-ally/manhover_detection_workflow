@@ -13,7 +13,7 @@ AX650                RK3588（本工程）
 VDEC 硬件解码   ->   MPP mpi_dec（RkDecoder）
 IVPS 缩放/转换 ->   RGA（rga_ops：resize / NV12<->BGR）
 VENC 硬件编码   ->   MPP mpi_enc（RkEncoder）
-RTP 推流        ->   rtp_pusher（与 ax650 同源，RTP/UDP -> MediaMTX）
+RTSP 推流       ->   FFmpeg -c copy -> RTSP（MPP 编码的 H.264 经管道推 MediaMTX）
 IVPS OSD region ->   降级：CPU 画框（主码流编码线程拉取 AI 结果，绘制到 BGR 帧）
 VideoDemux      ->   H264Demux（FFmpeg libavformat：RTSP/本地文件 -> H.264 AnnexB）
 ```
@@ -44,7 +44,7 @@ RkDecoder（MPP mpi_dec，H.264 -> NV12）◄──────── 对应 AX6
  RkEncoder（MPP mpi_enc）         （对应 AX650 OSDAssociatedModel）
    │  （对应 AX650 VENC）          │
    ▼                              │
- rtp_pusher -> MediaMTX(RTP)  ◄───┘（主码流编码线程读取，跨流叠加画框）
+ ffmpeg -c copy -> RTSP -> MediaMTX  ◄───┘（主码流编码线程读取，跨流叠加画框）
  或离线 raw H.264 文件 + ffmpeg 封装 MP4
 ```
 
@@ -70,8 +70,7 @@ model_deployment/rk3588/manhole_cover_detection/
 ├── common/
 │   ├── rk_media.{h,cpp}               # 档位2：MPP 解码/编码 + RGA 封装（对应 VDEC/IVPS/VENC）
 │   ├── h264_demux.{h,cpp}             # FFmpeg libavformat 解封装（对应 VideoDemux）
-│   ├── frame_broker.h                 # 主码流<->AI 流共享（NV12 帧 / AI 结果）
-│   └── common_pipeline/rtp_pusher.{c,h}  # 与 ax650 同源：RTP/UDP 推 MediaMTX
+│   └── frame_broker.h                 # 主码流<->AI 流共享（NV12 帧 / AI 结果）
 ├── include/
 │   ├── ai_interface.h                 # 平台无关插件 ABI（IAIModel / AI_RESULT_T / AI_FRAME_T）
 │   ├── rknpu_manhole.hpp              # RKNN 检测器类声明
@@ -217,10 +216,11 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ./demo -c ../config/streams_config.json -m stream
 ```
 
-流程：`H264Demux(RTSP) -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
--> rtp_pusher(RTP/UDP) -> MediaMTX`（与 AX650 完全一致）。MediaMTX 端点默认
-`127.0.0.1:8000`，可由 `--mediamtx IP:PORT` / 配置 `mediamtx_host/mediamtx_port` /
-环境变量覆盖；主机通过 SSH `-L 8557` 查看 `rtsp://127.0.0.1:8557/ai_out`。
+流程：`H264Demux(RTSP/文件) -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
+-> ffmpeg -c copy -> RTSP -> MediaMTX`（硬件编码，只换传输层）。RTSP 输出默认
+`rtsp://<host>:8554/ai_out`，可由配置 `rtsp_output_url` / `--mediamtx` 覆盖；主机通过
+SSH `-L 8557` 查看 `rtsp://127.0.0.1:8557/ai_out`。板端 MediaMTX 需开 RTSP
+（`rtspAddress`），作为 publisher 接收本工程 RTSP 推流。
 
 ## 配置热更新
 
@@ -237,7 +237,7 @@ cp config/streams_config.json /dev/shm/ai_config.json
   `CreateAIModel()/DestroyAIModel()`，主程序 `AIProcessor` 负责 `dlopen`；
   多模型（并行/串行 ROI）由 `InferenceManager` 调度（与 ax650 同语义）。
 - **每路输入拆两条流（与 AX650 一致）**：主码流（H264Demux+MPP 解码+RGA+OSD+MPP 编码
-  +rtp_pusher）与 AI 流（FrameBroker 取帧+RGA 640+RKNN 推理+SharedAIResult）；
+  +ffmpeg RTSP）与 AI 流（FrameBroker 取帧+RGA 640+RKNN 推理+SharedAIResult）；
   主码流编码线程在编码前拉取 AI 结果并 CPU 画框（IVPS OSD region 的降级实现）。
 - 阈值透传：`AIProcessor::applyModelParamsToEnv` 把配置 `conf_threshold/nms_threshold`
   写入 `MANHOLE_CONF_THRESH/MANHOLE_NMS_THRESH`（并回退 `MODEL_*`）；插件 `Init()`

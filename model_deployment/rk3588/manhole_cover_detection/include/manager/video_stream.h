@@ -5,7 +5,7 @@
 // 每路输入拆两条流（与 AX650 一致）：
 //   主码流（isMainStream = isMediaMTXOutput || isFileOutput）：
 //     H264Demux -> MPP 解码(NV12) -> RGA 缩放/转BGR -> CPU 画框(OSD 降级)
-//     -> RGA 转NV12 -> MPP 编码 -> rtp_pusher(MediaMTX RTP) / 文件
+//     -> RGA 转NV12 -> MPP 编码 -> ffmpeg -c copy RTSP(MediaMTX) / raw 文件
 //   AI 流（isAIStream = enableAI && !isMainStream）：
 //     FrameBroker 取 NV12 -> RGA 640x640 -> RKNN 插件 -> SharedAIResult
 // 对应硬件：VDEC=MPP mpi_dec、IVPS=RGA、VENC=MPP mpi_enc（IVPS OSD region 降级为 CPU 画框）
@@ -26,7 +26,6 @@
 #include "rk_media.h"
 #include "h264_demux.h"
 #include "frame_broker.h"
-#include "common_pipeline/rtp_pusher.h"
 
 class VideoStream {
 public:
@@ -93,7 +92,6 @@ private:
 
     void onDecodedFrame(const RkNv12Frame& frame);
     void pushToOutput(const uint8_t* data, size_t size);
-    void pushH264ToRtp(const uint8_t* data, size_t size);
     void openOutput();
     void closeOutput();
     void rebuildProcessors(const std::vector<ModelStageConfig>& stages,
@@ -116,9 +114,8 @@ private:
     std::unique_ptr<RkDecoder> decoder_;
     std::unique_ptr<RkEncoder> encoder_;
     std::unique_ptr<H264Demux> demux_;
-    rtp_pusher_t rtpPusher_{};
-    bool rtpReady_ = false;
-    FILE* fileOut_ = nullptr;
+    FILE* fileOut_ = nullptr;      // offline：raw H.264 文件
+    FILE* rtspPipe_ = nullptr;     // stream：ffmpeg RTSP 子进程 stdin（-c copy）
 
     // 中间缓冲（主码流：NV12->BGR->画框->NV12；AI 流：NV12->640 BGR）
     std::vector<uint8_t> nv12Tmp_;   // resize 中间帧

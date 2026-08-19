@@ -152,10 +152,11 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 ./demo -c ../config/streams_config.json -m stream
 ```
 
-流程：`H264Demux(RTSP) -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
--> rtp_pusher(RTP/UDP) -> MediaMTX`（与 AX650 一致）。MediaMTX 端点默认
-`127.0.0.1:8000`（`--mediamtx` / 配置 `mediamtx_host/mediamtx_port` / 环境变量覆盖）；
-主机通过 SSH `-L` 映射后的 `rtsp://127.0.0.1:8557/ai_out` 查看。
+流程：`H264Demux(RTSP/文件) -> MPP 解码 -> RGA 缩放 -> CPU 画框 -> RGA 转 NV12 -> MPP 编码
+-> ffmpeg -c copy -> RTSP -> MediaMTX`（硬件编码，只换传输层）。RTSP 输出默认
+`rtsp://<host>:8554/ai_out`（`rtsp_output_url` / `--mediamtx` 覆盖）；主机通过 SSH `-L`
+映射后的 `rtsp://127.0.0.1:8557/ai_out` 查看。板端 MediaMTX 需开 RTSP（`rtspAddress`），
+作为 publisher 接收本工程 RTSP 推流。
 
 ### 3.3 配置热更新
 
@@ -182,7 +183,7 @@ src/manager/video_stream_manager.cpp
 
 src/manager/video_stream.cpp
    每路输入拆两条流（与 ax650 一致）：
-   主码流：H264Demux -> MPP 解码 -> RGA -> CPU 画框 -> MPP 编码 -> rtp_pusher/文件
+   主码流：H264Demux -> MPP 解码 -> RGA -> CPU 画框 -> MPP 编码 -> ffmpeg RTSP/文件
    AI 流：FrameBroker 取帧 -> RGA 640 -> 推理 -> SharedAIResult
 
 common/rk_media.{h,cpp}
@@ -190,9 +191,6 @@ common/rk_media.{h,cpp}
 
 common/h264_demux.{h,cpp}
    FFmpeg libavformat 解封装（对应 VideoDemux）
-
-common/common_pipeline/rtp_pusher.{c,h}
-   与 ax650 同源：RTP/UDP 推 MediaMTX
 
 src/manager/ai_processor.cpp
    根据配置 plugin 字段或默认 ./libmanhole_plugin.so dlopen 插件，

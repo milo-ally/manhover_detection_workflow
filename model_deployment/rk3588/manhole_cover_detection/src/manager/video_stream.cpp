@@ -180,65 +180,37 @@ void VideoStream::openOutput() {
               config_.streamId, config_.outputFilePath.c_str());
         return;
     }
-    if (config_.isMediaMTXOutput && !config_.mediamtxEndpoint.empty()) {
-        std::string host = config_.mediamtxEndpoint;
-        uint16_t port = 8000;
-        size_t colon = host.find(':');
-        if (colon != std::string::npos) {
-            port = static_cast<uint16_t>(atoi(host.substr(colon + 1).c_str()));
-            host = host.substr(0, colon);
-        }
-        if (rtp_pusher_init(&rtpPusher_, host.c_str(), port, 0) == 0) {
-            rtpReady_ = true;
-            ALOGN("[VideoStream] Stream %d: output_mode=rtp MediaMTX %s:%u",
-                  config_.streamId, host.c_str(), port);
+    if (config_.isMediaMTXOutput) {
+        // stream：MPP 编码出的 H.264（annexb，含 SPS/PPS 前缀）经管道喂给 ffmpeg，
+        // ffmpeg -c copy 直接封装 RTSP 发布到 MediaMTX（板端 RTSP publisher 机制，v1.10.0 可用）。
+        // 保留硬件编码，只换传输层：不用裸 RTP 推流（v1.10.0 收不了 udp+rtp source）。
+        std::string url = config_.rtspOutputUrl;
+        if (url.empty()) url = "rtsp://127.0.0.1:8554/ai_out";
+        // 用单引号包住 URL，避免特殊字符被 shell 解释（URL 内没有单引号时安全）
+        // -framerate <fps> 给裸 H.264 提供帧率，ffmpeg 才能为 RTSP 生成正确时间戳
+        std::string cmd = "ffmpeg -hide_banner -loglevel warning -y "
+                          "-f h264 -framerate " + std::to_string(config_.fps) +
+                          " -i pipe:0 -c copy "
+                          "-f rtsp -rtsp_transport tcp '" + url + "'";
+        rtspPipe_ = popen(cmd.c_str(), "w");
+        if (rtspPipe_) {
+            ALOGN("[VideoStream] Stream %d: output_mode=rtsp %s (ffmpeg -c copy)",
+                  config_.streamId, url.c_str());
         } else {
-            ALOGE("[VideoStream] Stream %d: rtp_pusher_init failed: %s:%u",
-                  config_.streamId, host.c_str(), port);
+            ALOGE("[VideoStream] Stream %d: failed to start ffmpeg RTSP push: %s",
+                  config_.streamId, cmd.c_str());
         }
     }
 }
 
 void VideoStream::pushToOutput(const uint8_t* data, size_t size) {
-    // 诊断：打印前 4 个包的 size 和前 4 字节（应为 00 00 00 01 起始码）
-    static int pktLog = 0;
-    if (pktLog < 4 && data && size > 0) {
-        const unsigned char* d = reinterpret_cast<const unsigned char*>(data);
-        ALOGN("[VideoStream] Stream %d: out pkt[%d] size=%zu head=%02x %02x %02x %02x",
-              config_.streamId, pktLog++, size,
-              size > 0 ? d[0] : 0, size > 1 ? d[1] : 0,
-              size > 2 ? d[2] : 0, size > 3 ? d[3] : 0);
-    }
     if (fileOut_) {
         fwrite(data, 1, size, fileOut_);
         return;
     }
-    if (rtpReady_) {
-        pushH264ToRtp(data, size);
-    }
-}
-
-void VideoStream::pushH264ToRtp(const uint8_t* data, size_t size) {
-    // 按起始码切分 NAL，逐个推 RTP（rtp_pusher 内部处理 RTP 分片）
-    const uint64_t pts = static_cast<uint64_t>(frameCount_.load()) * 1000000 / config_.fps;
-    size_t pos = 0;
-    while (pos + 4 <= size) {
-        size_t start = pos;
-        while (pos + 4 <= size) {
-            if (data[pos] == 0 && data[pos + 1] == 0 && data[pos + 2] == 1) {
-                pos += 3;
-                break;
-            }
-            if (data[pos] == 0 && data[pos + 1] == 0 && data[pos + 2] == 0 && data[pos + 3] == 1) {
-                pos += 4;
-                break;
-            }
-            ++pos;
-        }
-        if (pos > size) break;
-        // [start, pos) 是一个 NAL（含起始码）
-        rtp_pusher_push_nalu(&rtpPusher_, data + start, static_cast<uint32_t>(pos - start), pts);
-        if (pos + 4 > size) break;
+    if (rtspPipe_) {
+        fwrite(data, 1, size, rtspPipe_);
+        fflush(rtspPipe_);
     }
 }
 
@@ -347,9 +319,10 @@ void VideoStream::closeOutput() {
         fclose(fileOut_);
         fileOut_ = nullptr;
     }
-    if (rtpReady_) {
-        rtp_pusher_deinit(&rtpPusher_);
-        rtpReady_ = false;
+    if (rtspPipe_) {
+        // 关闭 stdin 让 ffmpeg 收到 EOF，正常结束 RTSP 推流
+        pclose(rtspPipe_);
+        rtspPipe_ = nullptr;
     }
 }
 

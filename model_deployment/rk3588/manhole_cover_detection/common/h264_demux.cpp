@@ -171,7 +171,6 @@ bool H264Demux::readOnce() {
     }
 
     bool delivered = false;
-    static int pktLog = 0;   // 诊断：打印前几个包的 size/起始码
     // 首个视频包前，先注入从 extradata 提取的 SPS/PPS，让 MPP 能初始化
     //（RTSP 数据包内通常不含 SPS/PPS，若不先发，MPP 永远等不到关键帧）
     if (pkt->stream_index == streamIdx_) {
@@ -185,9 +184,6 @@ bool H264Demux::readOnce() {
             AVBSFContext* b = static_cast<AVBSFContext*>(bsfCtx_);
             if (av_bsf_send_packet(b, pkt) == 0) {
                 while (av_bsf_receive_packet(b, pkt) == 0) {
-                    if (pktLog++ < 10)
-                        fprintf(stderr, "[H264Demux] cb pkt size=%d head=%02x%02x%02x%02x\n",
-                                pkt->size, pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3]);
                     if (cb_ && !cb_(pkt->data, pkt->size)) {
                         delivered = false;
                         break;
@@ -198,14 +194,9 @@ bool H264Demux::readOnce() {
                 }
             }
         } else {
-            if (pktLog++ < 10)
-                fprintf(stderr, "[H264Demux] cb pkt(no bsf) size=%d\n", pkt->size);
             if (cb_) delivered = cb_(pkt->data, pkt->size);
             if (delivered) deliveredCount_++;
         }
-    } else {
-        if (pktLog++ < 5)
-            fprintf(stderr, "[H264Demux] skip stream_idx=%d\n", pkt->stream_index);
     }
     av_packet_free(&pkt);
     return delivered;

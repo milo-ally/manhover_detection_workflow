@@ -190,14 +190,12 @@ add_executable(demo
     src/manager/osd_renderer.cpp
     common/rk_media.cpp
     common/h264_demux.cpp
-    common/common_pipeline/rtp_pusher.c
 )
 target_include_directories(demo PRIVATE
     include
     include/manager
     utilities
     common
-    common/common_pipeline
     ${MPP_INCLUDE_DIR}
     ${RGA_INCLUDE_DIR}
     ${AVFORMAT_INCLUDE_DIR}
