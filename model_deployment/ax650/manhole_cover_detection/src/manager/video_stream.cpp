@@ -2,6 +2,7 @@
 #include "video_stream_manager.h"
 #include "osd_renderer.h"
 #include "ai_processor.h"
+#include "alarm_filter.h"
 #include "../../utilities/sample_log.h"
 #include "../../utilities/http_client.h"
 #include "../../utilities/json.hpp"
@@ -26,7 +27,7 @@
 
 #include "inference_manager.h"
 
-#define MAX_CONSECUTIVE_ERRORS 5  // 閸忎浇顔忛惃鍕付婢堆嗙箾缂侇參鏁婄拠顖涱偧閺?
+#define MAX_CONSECUTIVE_ERRORS 5  // 允许的最大连续错误次数
 
 static bool is_osd_disabled_by_env() {
     const char* v = std::getenv("AX_DISABLE_OSD");
@@ -56,7 +57,7 @@ public:
     }
 
     void enqueue(AlarmTask task) {
-        // 閸涘﹨顒熷宀€顏柅锝勭瑝娑撳﹥妾柅鎻掑弳閸愬嘲宓掗敍宀勪缉閸忓秵瀵旂痪灞界垻缁屽秳鎹㈤崟娆忓闂婃寧鏆ｆ鏂款嚊閺呭倹鈧?
+        // 告警後端連不上時進入冷卻，避免持續堆積任務影響整體實時性
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now().time_since_epoch())
                                 .count();
@@ -64,7 +65,7 @@ public:
             return;
         }
 
-        // 鐏?localhost 閸涘﹨顒熼張宥呭珡閹猴紕鏁ら弴瀵哥叚 timeout閿涘矂浼╅崗宥夋殾閺呭倿鏋旈梼璇差敚閸︺劌銇戦弫妤勭彌濮?
+        // 對 localhost 告警服務採用更短 timeout，避免長時間阻塞在失敗請求
         if (task.url.find("127.0.0.1") != std::string::npos ||
             task.url.find("localhost") != std::string::npos) {
             task.timeoutSec = 1;
@@ -74,7 +75,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(mutex_);
             if (queue_.size() >= kMaxQueueSize) {
-                // 闂呭﹤鍨鎸庢娑撶喐顥夐張鈧懜濠佹崲閸曟瑱绱濋崕顏勫帥娣囨繆鐡戞稉鏄忣浕闂嬪寮电捄?
+                // 隊列滿時丟棄最舊任務，優先保證主視頻鏈路
                 queue_.pop();
             }
             queue_.push(std::move(task));
@@ -96,9 +97,10 @@ private:
 
             auto response = HttpClient::post(task.url, task.payload, task.timeoutSec);
             if (response.statusCode != 200) {
-                // 瀵板瞼顏稉宥呭讲闁梹妾柆鍨帳妤傛﹢鐗烽柌宥堚攤閼稿洭鐝棆缁樻）鐟惧矉绱濋梽宥勭秵 CPU/IO 閹舵牕瀚婄亸宥咁嚊閺呭倿寮电捄顖滄畱瑜伴亶鐔?                static int fail_log_count = 0;
+                // 後端不可達時避免高頻重試與高頻日誌，降低 CPU/IO 抖動對實時鏈路的影響
+                static int fail_log_count = 0;
                 if (++fail_log_count % 120 == 0) {
-                    ALOGW("[Alarm] 閸欐垿鈧礁銇戠拹? status=%d, error=%s",
+                    ALOGW("[Alarm] 发送失败: status=%d, error=%s",
                           response.statusCode, response.error.c_str());
                 }
 
@@ -107,7 +109,9 @@ private:
                     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                             std::chrono::steady_clock::now().time_since_epoch())
                                             .count();
-                    cooldown_until_ms_.store(now_ms + 30000, std::memory_order_relaxed); // 30s 閻旀梹鏌?                    // 閻旀梹鏌楅弲鍌涚缁屾椽娈滈崚妤嬬礉闁灝鍘ょ粚宥咁棙娴犺瀚忓宀€绨╃粣浣烘闁礁鍤?                    std::lock_guard<std::mutex> lk(mutex_);
+                    cooldown_until_ms_.store(now_ms + 30000, std::memory_order_relaxed); // 30s 熔斷
+                    // 熔斷時清空隊列，避免積壓任務後續突發送出
+                    std::lock_guard<std::mutex> lk(mutex_);
                     std::queue<AlarmTask> empty;
                     queue_.swap(empty);
                 }
@@ -130,7 +134,7 @@ private:
 
 static AsyncAlarmSender g_alarmSender;
 
-// 缁儳瀹崇亸宥嗙槷缁叉劖鐏夋稉濠傜墾閿涘牏鏆熷?POST /api/benchmark/result閿涘ource=edge閿?
+// 精度對比結果上報（異步 POST /api/benchmark/result，source=edge）
 class AsyncBenchmarkSender {
 public:
     struct Task {
@@ -161,7 +165,7 @@ private:
             }
             auto response = HttpClient::post(task.url, task.payload, task.timeoutSec);
             if (response.statusCode != 200) {
-                ALOGW("[Benchmark] 娑撳﹤鐗ㄦ径杈ㄦ櫧: status=%d", response.statusCode);
+                ALOGW("[Benchmark] 上報失敗: status=%d", response.statusCode);
             }
         }
     }
@@ -179,7 +183,7 @@ static std::string toLowerCodec(std::string codec) {
     return codec;
 }
 
-// 閸忋劌鐪?frame_id 閻劍鏌ょ划鎯у鐏忓秵鐦稉濠傜墾閿涘牆绶︾粩顖涘瘻閺呭倿鏋旈幋鍐茬毆姒诲绱濆銈堟閸嶅懘娓堕柆鐐差杻閿?
+// 全局 frame_id 用於精度對比上報（後端按時間戳對齊，此處僅需遞增）
 static std::atomic<uint64_t> g_benchmark_frame_id(0);
 
 struct BenchmarkReportCfg {
@@ -191,7 +195,8 @@ struct BenchmarkReportCfg {
 static BenchmarkReportCfg loadBenchmarkReportCfg() {
     BenchmarkReportCfg cfg;
 
-    // 1) env 闂佸妫為敍鍫濇倻瀵板瞼娴夌€圭櫢绱?    const char* backendUrlEnv = getenv("BACKEND_API_URL");
+    // 1) env 開關（向後相容）
+    const char* backendUrlEnv = getenv("BACKEND_API_URL");
     if (backendUrlEnv && *backendUrlEnv) cfg.backendUrl = backendUrlEnv;
 
     const char* enableEnv = getenv("BENCHMARK_REPORT");
@@ -201,15 +206,15 @@ static BenchmarkReportCfg loadBenchmarkReportCfg() {
     const char* sidEnv = getenv("BENCHMARK_REPORT_STREAM_ID");
     if (sidEnv && *sidEnv) cfg.streamId = atoi(sidEnv);
 
-    // 2) /dev/shm 濡炬梹顢嶉梺瀣閿涘牆褰查悽鍗炵乏缁旑垰瀚婇幈瀣嚑閸忋儻绱濇稉宥夋付闁插秴鏆夐柅鑼柤閿?
-    //    濡炬梹顢嶉弽鐓庣础閿?
+    // 2) /dev/shm 檔案開關（可由後端動態寫入，不需重啟進程）
+    //    檔案格式：
     //    { "enabled": true, "backend_url": "http://x.x.x.x:8001", "stream_id": 0 }
     try {
         static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         static BenchmarkReportCfg cached = cfg;
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count() < 500) {
-            return cached; // 闁灝鍘ゅВ蹇撶畱鐠佲偓濡?
+            return cached; // 避免每幀讀檔
         }
         last = now;
 
@@ -237,7 +242,7 @@ static BenchmarkReportCfg loadBenchmarkReportCfg() {
 static VideoStreamManager* g_stream_manager = nullptr;
 static std::mutex g_stream_manager_mutex;
 
-// 娑撳﹤鐗?benchmark / 閸涘﹨顒?/ OSD 缁垛晛鐡?/ updateAIResult閿涘湏IWorker 閸氬本顒為懜鍥ㄧウ濮樺绐旈崗杈╂暏閿?
+// 上報 benchmark / 告警 / OSD 緩存 / updateAIResult（AIWorker 同步與流水線共用）
 void deliverWorkerInferenceResult(VideoStream* s, int streamId, bool processSuccess, AI_RESULT_T& stResult,
                                   double inferenceTimeMs) {
     if (!processSuccess) {
@@ -279,6 +284,71 @@ void deliverWorkerInferenceResult(VideoStream* s, int streamId, bool processSucc
         g_benchmarkSender.enqueue(std::move(task));
     }
 
+    if (stResult.nObjSize > 0) {
+        AI_RESULT_T resultCopy;
+        resultCopy.nObjSize = stResult.nObjSize;
+        for (unsigned int i = 0; i < stResult.nObjSize && i < MAX_DETECT_OBJ_NUM; i++) {
+            resultCopy.objects[i] = stResult.objects[i];
+        }
+        std::string modelName = s->getModelName();
+        std::string modelPath = s->getModelPath();
+        std::string effectiveModelName = modelName;
+        if (effectiveModelName.empty() && !modelPath.empty()) {
+            size_t lastSlash = modelPath.find_last_of("/\\");
+            std::string fileName = (lastSlash != std::string::npos) ? modelPath.substr(lastSlash + 1) : modelPath;
+            size_t lastDot = fileName.find_last_of(".");
+            if (lastDot != std::string::npos) fileName = fileName.substr(0, lastDot);
+            effectiveModelName = fileName;
+        }
+        std::vector<AI_OBJ_T> alarmObjects;
+        std::string alarmType, modelType, severity;
+        bool shouldReport = AlarmFilter::shouldReportAlarm(effectiveModelName, resultCopy, alarmType, modelType,
+                                                           severity, alarmObjects);
+        if (shouldReport && !alarmObjects.empty()) {
+            const char* backendUrl = getenv("BACKEND_API_URL");
+            const char* deviceIdStr = getenv("DEVICE_ID");
+            if (!backendUrl) backendUrl = "http://127.0.0.1:8001";
+            int deviceId = deviceIdStr ? std::atoi(deviceIdStr) : 1;
+            nlohmann::json alarmJson;
+            alarmJson["device_id"] = deviceId;
+            alarmJson["model_type"] = modelType;
+            alarmJson["alarm_type"] = alarmType;
+            alarmJson["severity"] = severity;
+            nlohmann::json detections = nlohmann::json::array();
+            for (const auto& obj : alarmObjects) {
+                nlohmann::json det;
+                det["x"] = obj.x;
+                det["y"] = obj.y;
+                det["w"] = obj.w;
+                det["h"] = obj.h;
+                det["score"] = obj.score;
+                det["label"] = obj.label;
+                det["class_id"] = obj.class_id;
+                if (obj.track_id > 0) det["track_id"] = static_cast<int64_t>(obj.track_id);
+                if (obj.nKeypoints > 0) {
+                    nlohmann::json keypoints = nlohmann::json::array();
+                    for (unsigned int k = 0; k < obj.nKeypoints && k < MAX_KEYPOINTS; k++) {
+                        nlohmann::json kp;
+                        kp["x"] = obj.keypoints[k].x;
+                        kp["y"] = obj.keypoints[k].y;
+                        kp["conf"] = obj.keypoints[k].conf;
+                        keypoints.push_back(kp);
+                    }
+                    det["keypoints"] = keypoints;
+                    det["n_keypoints"] = obj.nKeypoints;
+                }
+                detections.push_back(det);
+            }
+            alarmJson["detections"] = detections;
+            alarmJson["camera_id"] = streamId;
+            AsyncAlarmSender::AlarmTask task;
+            task.url = std::string(backendUrl) + "/api/alarms";
+            task.payload = alarmJson.dump();
+            task.timeoutSec = 5;
+            g_alarmSender.enqueue(std::move(task));
+        }
+    }
+
     std::shared_ptr<AIProcessor> firstProc = s->getAIProcessor();
     if (firstProc) {
         std::lock_guard<std::mutex> lock(s->stateMutex_);
@@ -296,7 +366,7 @@ void deliverWorkerInferenceResult(VideoStream* s, int streamId, bool processSucc
     if (g_stream_manager) g_stream_manager->updateAIResult(streamId, &stResult);
 }
 
-// 濮ｅ繗鐭?AI 閸ュ搫鐣炬稉鈧崐?worker 缁舵氨鈻奸敍宀勪缉閸忓秵鐦￠獮鈧?std::thread().detach() 鐏忓氦鍤ч梹閿嬫闂佹捇浜辩悰灞界乏缁舵氨鈻?鐟锋ɑ鍠嶆鏃囩。濠ф劘鈧娲濋敍鍨€10 閸掑棝鎮╅弬閿嬬ウ閿?
+// 每路 AI 固定一個 worker 線程，避免每幀 std::thread().detach() 導致長時間運行後線程/記憶體資源耗盡（~10 分鐘斷流）
 struct AIFrameJob {
     std::vector<uint8_t> frameData;
     uint32_t w = 0, h = 0, stridePix = 0, sz = 0;
@@ -407,12 +477,339 @@ private:
                     ALOGW("Too many consecutive errors, disabling AI for stream %d", streamId_);
                     s->setAIEnabled(false);
                     std::lock_guard<std::mutex> lock(g_stream_manager_mutex);
-                    if (g_stream_manager) g_stream_manager->updateAIResult(streamId_, &stResult);
+                    if (g_stream_manager) g_stream_manager->notifyAIError(streamId_, e.what());
+                } else {
+                    std::shared_ptr<AIProcessor> first = s->getAIProcessor();
+                    if (first) {
+                        first->unloadModel();
+                        if (!first->loadModel(s->getModelPath(), s->getModelName())) {
+                            ALOGE("Failed to reload model after exception");
+                            s->setAIEnabled(false);
+                        }
+                    }
                 }
+                stResult.nObjSize = 0;
+                std::lock_guard<std::mutex> lock(g_stream_manager_mutex);
+                if (g_stream_manager) g_stream_manager->updateAIResult(streamId_, &stResult);
             }
         }
     }
+
+    int streamId_;
+    std::thread thread_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool running_ = true;
+    std::unique_ptr<AIFrameJob> pending_;
+    std::deque<std::shared_future<InferenceManager::FrameResult>> overlapFutures_;
 };
+
+// RAII: ensure callback count is decremented
+struct CallbackGuard {
+    VideoStream* s;
+    explicit CallbackGuard(VideoStream* stream) : s(stream) {
+        if (s) s->onCallbackEnter();
+    }
+    ~CallbackGuard() {
+        if (s) s->onCallbackExit();
+    }
+};
+
+// RAII: ensure mmap is always unmapped
+struct MmapGuard {
+    void* addr = nullptr;
+    size_t size = 0;
+    ~MmapGuard() {
+        if (addr && size > 0) {
+            AX_SYS_Munmap(addr, size);
+        }
+    }
+};
+
+static std::map<int, VideoStream*> g_stream_instances;
+static std::mutex g_stream_instances_mutex;
+
+void VideoStream::setGlobalStreamManager(VideoStreamManager* manager) {
+    std::lock_guard<std::mutex> lock(g_stream_manager_mutex);
+    g_stream_manager = manager;
+}
+
+// #region agent log
+// Debug logging helper function
+static void debug_log(const std::string& location, const std::string& message, const std::map<std::string, std::string>& data = {}) {
+    std::ofstream log_file("c:\\Users\\ly0248\\Desktop\\20251231\\.cursor\\debug.log", std::ios::app);
+    if (!log_file.is_open()) return;
+    
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+    ss << "." << std::setfill('0') << std::setw(3) << ms.count();
+    
+    log_file << "{\"timestamp\":" << std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
+             << ",\"location\":\"" << location << "\",\"message\":\"" << message << "\"";
+    
+    for (const auto& pair : data) {
+        log_file << ",\"" << pair.first << "\":\"" << pair.second << "\"";
+    }
+    
+    log_file << "}\n";
+    log_file.close();
+}
+// #endregion
+
+VideoStream::VideoStream(const StreamConfig& config) 
+    : config_(config), 
+      pipeline_({0}),
+      // 參考 ax650_o：OSD Renderer 使用 pipeline 創建的 OSD Region
+      // 先創建 OSDRenderer，但傳入 pipeline 指針（在 createProcessingPipeline 之後初始化）
+      osdRenderer_(nullptr), 
+      activeCallbacks_(0) {
+  
+    // 初始化pipeline结构体
+    pipeline_.pipeid = config_.streamId;
+    pipeline_.enable = 0;
+    pipeline_.n_loog_exit = 0;
+    
+    resolveInputCodecConfig();
+    pipeline_.m_input_type = preferredInputType_;
+    
+    // 配置输出类型
+    if (config_.isRTSPOutput) {
+        // RTSP推流
+        pipeline_.m_output_type = po_rtsp_h264;
+        snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
+                "%s%d", config_.rtspEndpoint.c_str(), config_.streamId);
+        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
+    } else if (config_.isMediaMTXOutput) {
+        // MediaMTX推送
+        // 每個主碼流使用不同的 VENC channel（streamId），避免多個主碼流衝突
+        // 650_o 可能只支持單個主碼流，所以使用 channel 0
+        // 但我們支持多個主碼流，所以需要使用不同的 channel
+        pipeline_.m_output_type = po_mediamtx_h264;
+        snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
+                "%s", config_.mediamtxEndpoint.c_str());
+        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
+    } else if (config_.enableAI) {
+        // AI推理输出为NV12缓冲区
+        pipeline_.m_output_type = po_buff_nv12;
+        pipeline_.output_func = aiInferenceCallback;
+        // AI 流不使用 VENC，清除 VENC 配置
+        pipeline_.m_venc_attr.n_venc_chn = -1;  // 設置為無效值，表示不使用 VENC
+    }
+    
+    // 配置解码器属性
+    pipeline_.m_vdec_attr.n_vdec_grp = config_.vdecGroup;
+    
+    // 配置IVPS属性
+    pipeline_.m_ivps_attr.n_ivps_grp = config_.ivpsGroup;
+    pipeline_.m_ivps_attr.n_ivps_width = config_.outputWidth;
+    pipeline_.m_ivps_attr.n_ivps_height = config_.outputHeight;
+    pipeline_.m_ivps_attr.n_ivps_fps = config_.fps;
+    pipeline_.m_ivps_attr.n_fifo_count = config_.enableAI ? 1 : 0;
+    // OSD 僅在啟用 AI 時掛載，方便隔離測試：關閉 AI 時無 OSD，若殘影消失則問題在 OSD
+    bool needOSD = config_.enableAI && !is_osd_disabled_by_env();
+    pipeline_.m_ivps_attr.n_osd_rgn = needOSD ? 1 : 0;
+    
+    // 注册实例指针
+    {
+        std::lock_guard<std::mutex> lock(g_stream_instances_mutex);
+        g_stream_instances[config_.streamId] = this;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        inferenceManager_ = std::make_unique<InferenceManager>();
+        inferenceManager_->configure(aiProcessors_, config_.modelStages, config_.aiPipelineMode);
+    }
+}
+
+VideoStream::~VideoStream() {
+    // 1. 先从全局映射移除，防止新的回调进入
+    {
+        std::lock_guard<std::mutex> lock(g_stream_instances_mutex);
+        // 注意：VideoStream 可能經歷 move，moved-from 物件的 destructor 不應該把
+        // moved-to 物件的映射刪掉；因此只在 key 對應的指標仍是自己時才 erase。
+        auto it = g_stream_instances.find(config_.streamId);
+        if (it != g_stream_instances.end() && it->second == this) {
+            g_stream_instances.erase(it);
+        }
+    }
+
+    // 2. 停止流并等待现有回调结束
+    stop();
+}
+
+// 移動構造函數
+VideoStream::VideoStream(VideoStream&& other) noexcept
+    : config_(std::move(other.config_)),
+      pipeline_(other.pipeline_),
+      running_(other.running_),
+      aiProcessors_(std::move(other.aiProcessors_)),
+      osdRenderer_(std::move(other.osdRenderer_)),
+      outputCallback_(std::move(other.outputCallback_)),
+      aiWorker_(std::move(other.aiWorker_)),
+      inferenceManager_(std::move(other.inferenceManager_)) {
+    other.running_ = false;
+    memset(&other.pipeline_, 0, sizeof(other.pipeline_));
+
+    // move 後更新全域映射，避免 aiInferenceCallback 找不到對應 stream
+    {
+        std::lock_guard<std::mutex> lock(g_stream_instances_mutex);
+        g_stream_instances[config_.streamId] = this;
+    }
+    // 防止 moved-from 物件 destructor 誤刪映射
+    other.config_.streamId = -1;
+}
+
+// 移動賦值運算符
+VideoStream& VideoStream::operator=(VideoStream&& other) noexcept {
+    if (this != &other) {
+        stop();
+        config_ = std::move(other.config_);
+        pipeline_ = other.pipeline_;
+        running_ = other.running_;
+        aiProcessors_ = std::move(other.aiProcessors_);
+        osdRenderer_ = std::move(other.osdRenderer_);
+        outputCallback_ = std::move(other.outputCallback_);
+        aiWorker_ = std::move(other.aiWorker_);
+        inferenceManager_ = std::move(other.inferenceManager_);
+
+        other.running_ = false;
+        memset(&other.pipeline_, 0, sizeof(other.pipeline_));
+
+        // move 後更新全域映射，避免 aiInferenceCallback 找不到對應 stream
+        {
+            std::lock_guard<std::mutex> lock(g_stream_instances_mutex);
+            g_stream_instances[config_.streamId] = this;
+        }
+        // 防止 moved-from 物件 destructor 誤刪映射
+        other.config_.streamId = -1;
+    }
+    return *this;
+}
+
+// 启动视频流
+bool VideoStream::start() {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (running_) {
+        ALOGN("Stream %d already running", config_.streamId);
+        return true;
+    }
+    
+    ALOGN("Creating processing pipeline for stream %d...", config_.streamId);
+    consecutiveInputErrors_ = 0;
+    if (createProcessingPipeline()) {
+        running_ = true;
+        ALOGI("Stream %d started (IVPS group %d, VDEC group %d)", 
+              config_.streamId, config_.ivpsGroup, config_.vdecGroup);
+        return true;
+    }
+    ALOGE("Failed to create processing pipeline for stream %d", config_.streamId);
+    return false;
+}
+
+// 停止视频流
+void VideoStream::stop() {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (!running_) return;
+
+    ALOGN("Stopping stream %d...", config_.streamId);
+    
+    // 1. Signal pipeline logic to exit
+    pipeline_.n_loog_exit = 1;
+
+    // 2. Wait for active AI callbacks to finish
+    {
+        std::unique_lock<std::mutex> stopLock(stopMutex_);
+        if (activeCallbacks_.load(std::memory_order_relaxed) > 0) {
+            ALOGW("Stream %d waiting for %d callbacks...", config_.streamId, activeCallbacks_.load());
+            // 等待直到计数归零，或超时 2s 防止死锁
+            stopCv_.wait_for(stopLock, std::chrono::seconds(2), 
+                [this] { return activeCallbacks_.load(std::memory_order_relaxed) == 0; });
+        }
+    }
+
+    // 3. Destory pipeline resources
+    destroyProcessingPipeline();
+    
+    if (osdRenderer_) {
+        osdRenderer_->clear();
+    }
+    
+    running_ = false;
+    ALOGI("Stream %d stopped", config_.streamId);
+}
+
+// 查询流是否在运行
+bool VideoStream::isRunning() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return running_;
+}
+
+// 设置AI处理器（锁内仅swap，锁外析构）；單模型向後兼容
+void VideoStream::setAIProcessor(std::unique_ptr<AIProcessor> processor) {
+    std::vector<std::shared_ptr<AIProcessor>> next;
+    if (processor) {
+        next.push_back(std::shared_ptr<AIProcessor>(processor.release()));
+    }
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    aiProcessors_.swap(next);
+    if (!inferenceManager_) inferenceManager_ = std::make_unique<InferenceManager>();
+    inferenceManager_->configure(aiProcessors_, config_.modelStages, config_.aiPipelineMode);
+}
+
+// 設置多個 AI 處理器（並行多模型或串行階段）
+void VideoStream::setAIProcessors(std::vector<std::unique_ptr<AIProcessor>> processors) {
+    std::vector<std::shared_ptr<AIProcessor>> next;
+    for (auto& p : processors) {
+        if (p) next.push_back(std::shared_ptr<AIProcessor>(p.release()));
+    }
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    aiProcessors_.swap(next);
+    if (!inferenceManager_) inferenceManager_ = std::make_unique<InferenceManager>();
+    inferenceManager_->configure(aiProcessors_, config_.modelStages, config_.aiPipelineMode);
+}
+
+// 外部输入帧处理（如推理/转码等）
+void VideoStream::processFrame(pipeline_buffer_t* buffer) {
+    std::lock_guard<std::mutex> lock(pipelineMutex_);
+    if (!isRunning() || !buffer) return;
+    // 若 pipeline 已標記退出，不再送幀，避免 user_input 內 pipe 已從 pipeline_handle 移除導致異常
+    if (pipeline_.n_loog_exit) return;
+
+    // 商業穩定優先：禁止在進入 VDEC 前做編碼幀節流丟棄。
+    // 對 H264/H265 這會破壞參考鏈，直接導致花屏與週期性卡頓。
+
+    static int frame_log_count[64] = {0};
+    const int sid_log = (config_.streamId >= 0 && config_.streamId < 64) ? config_.streamId : 0;
+    if (++frame_log_count[sid_log] % 300 == 0) {
+        ALOGN("[VideoStream] Processing frame for stream %d (pipeid=%d, inputSource=%s, isMediaMTXOutput=%d, venc_chn=%d)", 
+              config_.streamId, pipeline_.pipeid, config_.inputSource.c_str(), 
+              config_.isMediaMTXOutput ? 1 : 0, pipeline_.m_venc_attr.n_venc_chn);
+    }
+
+    // 将帧送入pipeline
+    int ret = user_input(&pipeline_, 1, buffer);
+    if (ret == 0) {
+        consecutiveInputErrors_ = 0;
+        return;
+    }
+
+    ++consecutiveInputErrors_;
+    if (autoCodecFallbackEnabled_ && !autoCodecFallbackSwitched_ && consecutiveInputErrors_ >= 6) {
+        if (tryAutoCodecFallbackLocked()) {
+            consecutiveInputErrors_ = 0;
+            return;
+        }
+    }
+}
+
+void VideoStream::onCallbackEnter() {
+    activeCallbacks_.fetch_add(1, std::memory_order_relaxed);
+}
 
 void VideoStream::onCallbackExit() {
     if (activeCallbacks_.fetch_sub(1, std::memory_order_relaxed) == 1) {
@@ -420,7 +817,8 @@ void VideoStream::onCallbackExit() {
     }
 }
 
-// 閸斻劍鈧焦娲块弬鐗堢ウ闁板秶鐤?void VideoStream::updateConfig(const StreamConfig& newConfig) {
+// 动态更新流配置
+void VideoStream::updateConfig(const StreamConfig& newConfig) {
     StreamConfig oldConfig;
     bool needRestart = false;
     {
@@ -471,7 +869,7 @@ void VideoStream::onCallbackExit() {
     }
 }
 
-// 鐠佸墽鐤咥I閸氼垳鏁ら悩鑸碘偓?
+// 设置AI启用状态
 void VideoStream::setAIEnabled(bool enable) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.enableAI = enable;
@@ -483,20 +881,21 @@ void VideoStream::setAIEnabled(bool enable) {
     }
 }
 
-// 濞撳懘娅庨崨鎴掓姢鐞涘本膩閸ㄥ顬跨懛姗堢礉閸忎浇奴 Web 闁板秶鐤嗙憰鍡氭惖
+// 清除命令行模型標記，允許 Web 配置覆蓋
 void VideoStream::clearCommandLineModelFlag() {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.isCommandLineModel = false;
 }
 
-// 濞撳懘娅?OSD 妞ゎ垳銇?void VideoStream::clearOSD() {
+// 清除 OSD 顯示
+void VideoStream::clearOSD() {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (osdRenderer_) {
         osdRenderer_->clear();
     }
 }
 
-// 鐠佸墽鐤嗛梼鍫濃偓?
+// 设置阈值
 void VideoStream::setThresholds(float conf, float nms) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     for (auto& p : aiProcessors_) {
@@ -504,7 +903,7 @@ void VideoStream::setThresholds(float conf, float nms) {
     }
 }
 
-// 閺囧瓨鏌婇悾璺哄濡€崇€风捄顖氱帆閿涘牆鍨忛幓娑櫮侀崹瀣乏韫囧懘鐖ょ懢璺ㄦ暏閿涘苯鎯侀崜?getModelPath() 娴犲秶鍋ら懜濠傗偓纭风礆
+// 更新當前模型路徑（切換模型後必須調用，否則 getModelPath() 仍為舊值）
 void VideoStream::setModelPath(const std::string& path) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.modelPath = path;
@@ -515,7 +914,7 @@ void VideoStream::setModelName(const std::string& name) {
     config_.modelName = name;
 }
 
-// 閺囧瓨鏌婃径姘侀崹瀣帳缂?
+// 更新多模型配置
 void VideoStream::setModelStages(const std::vector<ModelStageConfig>& stages, AIPipelineMode mode) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     config_.modelStages = stages;
@@ -529,7 +928,7 @@ void VideoStream::setModelStages(const std::vector<ModelStageConfig>& stages, AI
     }
 }
 
-// 閼惧嘲褰囧Ο鈥崇€风捄顖氱窞閿涘牆顦垮Ο鈥崇€烽弲鍌濈箲閸ョ偟顑囨稉鈧崐瀣剁礆
+// 获取模型路径（多模型時返回第一個）
 std::string VideoStream::getModelPath() const {
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (!config_.modelPath.empty()) return config_.modelPath;
@@ -553,7 +952,8 @@ std::vector<std::string> VideoStream::getModelPaths() const {
     return paths;
 }
 
-// 閸?worker 缁舵氨鈻兼稉顓炵吋鐞涘本甯归悶鍡欐畱闂堟粍鍘犻崙鑺ユ毄閿涘牐鍨忔稉璇叉礀鐟惧灝鍙℃禍顐ゆ畱闁繗闆嗛敍宀勪缉閸忓秴婀?IVPS 缁舵氨鈻兼稉顓㈡▎婵夌儑绱?bool runAIInference(VideoStream* stream, AX_VIDEO_FRAME_T* tFrame, AI_RESULT_T* stResult) {
+// 在 worker 線程中執行推理的靜態函數（與主回調共享的邏輯，避免在 IVPS 線程中阻塞）
+bool runAIInference(VideoStream* stream, AX_VIDEO_FRAME_T* tFrame, AI_RESULT_T* stResult) {
     if (!stream || !tFrame || !stResult) return false;
     InferenceManager* mgr = nullptr;
     {
@@ -568,7 +968,7 @@ std::vector<std::string> VideoStream::getModelPaths() const {
 void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
     if (!buf) return;
 
-    // 閸︺劌鍤遍弫绋垮弳閸欙絽姘ㄧ懛姗€瀵楅敍宀€鈷戠懢宥呮礀鐟捐儻顫︾懢璺ㄦ暏閿涘牊鐦?0濞喡ゎ灳闁峰嫪绔村▎鈽呯礆
+    // 在函數入口就記錄，確認回調被調用（每30次記錄一次）
     static int entry_count[64] = {0};
     if (++entry_count[buf->pipeid] % 300 == 0) {
         ALOGN("[AI] aiInferenceCallback ENTRY for pipeid=%d, output_type=%d, frame_size=%dx%d", 
@@ -582,12 +982,12 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         if (it != g_stream_instances.end()) {
             stream = it->second;
         } else {
-            // [鐟捐儻鈹俔 缁斿宓嗙懛姗€瀵楅幍鍙ョ瑝閸?stream 閻ㄥ嫭鍎忓▔渚婄礄濮?0濞喡ゎ灳闁峰嫪绔村▎鈽呯礆
+            // [調試] 立即記錄找不到 stream 的情況（每30次記錄一次）
             static int not_found_count[64] = {0};
             if (++not_found_count[buf->pipeid] % 30 == 0) {
                 ALOGW("[AI] aiInferenceCallback: stream not found in g_stream_instances for pipeid=%d (total instances: %zu)", 
                       buf->pipeid, g_stream_instances.size());
-                // 閹垫挸宓冮幍鈧張澶婂嚒鐟疯鍞洪惃?pipeid
+                // 打印所有已註冊的 pipeid
                 for (const auto& pair : g_stream_instances) {
                     ALOGW("[AI]   Registered: pipeid=%d -> streamId=%d", 
                           pair.first, pair.second ? pair.second->config_.streamId : -1);
@@ -600,14 +1000,14 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         return;
     }
     
-    // 鐟锋﹢瀵楅崶鐐额€炵悮顐ヮ€為悽顭掔礄濮?0楠炩偓鐟锋﹢瀵楁稉鈧▎鈽呯礆
+    // 記錄回調被調用（每30幀記錄一次）
     static int callback_count[64] = {0};
     if (++callback_count[stream->config_.streamId] % 300 == 0) {
         ALOGN("[AI] aiInferenceCallback called for stream %d (pipeid=%d, frame_size=%d)", 
               stream->config_.streamId, buf->pipeid, buf->n_size);
     }
 
-    // 濡俱垺鐓￠柅鈧崙鐑橆灴鐟惧矉绱濋幓鎰鏉╂柨娲栭柆鍨帳閾忔洜鎮婂鎻掍粻濮濄垻娈戝ù?
+    // 檢查退出標誌，提前返回避免處理已停止的流
     if (stream->pipeline_.n_loog_exit) {
         return;
     }
@@ -629,7 +1029,7 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         return;
     }
 
-    // [閺佸牐鍏?瀵ゅ爼浼堥崕顏勫] 闂勫秳缍?AI 閹恒劎鎮婇棆鑽ゅ芳閸掗瀵岀喊鍏肩ウ閻?1/3閿涘牅绶ユ俊?30fps 閳?10fps閿?
+    // [效能/延遲優化] 降低 AI 推理頻率到主碼流的 1/3（例如 30fps → 10fps）
     static int infer_stride_count[64] = {0};
     static int adaptive_stride[64] = {0};
     static int submit_fail_count[64] = {0};
@@ -641,8 +1041,8 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
         return;
     }
 
-    // [闂傛粓宓夋穱顔间含] 婢舵俺鐭炬径姘侀崹瀣 AI 閸ョ偠顎為張鍐▎婵?IVPS 缁舵氨鈻奸敍灞界毇閼风鍨忔稉鑽も挀濞翠礁鍙￠悽銊ф畱 VDEC 閻掆剝纭堕崥鎴滃瘜 IVPS 闁礁绠戦敍灞煎瘜绾板吋绁?RTP 閸嬫粍顒涢妴?
-    // 閸嬫碍纭堕敍姘愁槵鐟佽棄绠戝宀€鐝涢崡瀹犵箲閸ョ儑绱濋崷?worker 缁舵氨鈻兼稉顓炵吋鐞涘本甯归悶鍡礉娴?IVPS 缁舵氨鈻奸惄鈥虫彥 ReleaseChnFrame閿涘奔绗夐梼璇差敚 VDEC閵?
+    // [關鍵修復] 多路多模型時 AI 回調會阻塞 IVPS 線程，導致與主碼流共用的 VDEC 無法向主 IVPS 送幀，主碼流 RTP 停止。
+    // 做法：複製幀後立即返回，在 worker 線程中執行推理，使 IVPS 線程盡快 ReleaseChnFrame，不阻塞 VDEC。
     AX_BOOL bMapped = AX_FALSE;
     if (!buf->p_vir && buf->p_phy) {
         buf->p_vir = AX_SYS_Mmap(buf->p_phy, buf->n_size);
@@ -654,11 +1054,11 @@ void VideoStream::aiInferenceCallback(pipeline_buffer_t* buf) {
     std::vector<uint8_t> frameData((uint8_t*)buf->p_vir, (uint8_t*)buf->p_vir + buf->n_size);
     const uint32_t w = buf->n_width, h = buf->n_height, stridePix = buf->n_stride, sz = buf->n_size;
 
-    // 閹绘劒姘︾徊锔芥拱濞翠礁鐨ラ悽?worker 缁舵氨鈻奸敍鍫濇祼鐎规氨绐旂粙瀣剁礉娑撳秵鐦￠獮鈧弬鏉跨紦閿涘绱濇担鍥у灙濠婂灝澧栨稉鐔风畱
+    // 提交給本流專用 worker 線程（固定線程，不每幀新建），佇列滿則丟幀
     if (!stream->submitAIFrame(std::move(frameData), w, h, stridePix, sz)) {
         submit_fail_count[idx]++;
         submit_ok_count[idx] = 0;
-        // Worker 缁讳礁绻栭弲鍌濆殰闁晜鍣抽梽宥夌壏閿涘苯鍔掗崗鍫滅箽闂呮粈瀵岀喊鍏肩ウ/VENC 鐠侯垰绶妴?
+        // Worker 繁忙時自適應降頻，優先保障主碼流/VENC 路徑。
         if (submit_fail_count[idx] % 4 == 0 && adaptive_stride[idx] < 18) {
             adaptive_stride[idx]++;
         }
@@ -680,69 +1080,73 @@ bool VideoStream::submitAIFrame(std::vector<uint8_t> frameData, uint32_t w, uint
     return aiWorker_->submit(std::move(frameData), w, h, stridePix, sz);
 }
 
-// 閸掓稑缂撴径鍕倞濞翠胶鈻奸敍鍧peline閿?
+// 创建处理流程（pipeline）
 bool VideoStream::createProcessingPipeline() {
-    // 闁插秵鏌婄懛顓犵枂 pipeline 閻ㄥ嫯鍑犻崙娲敚閸ㄥ鎷伴崶鐐额€為崙鑺ユ毄閿涘牆寮懓?ai_platform_RTP閿?
-    // 闁瑤绨虹懛顓犵枂韫囧懘鐖ら崷銊︾槨濞嗏€冲瀵?pipeline 閺呭倿鍣搁弬鎷屌嶇純?
+    // 重新設置 pipeline 的輸出類型和回調函數（參考 ai_platform_RTP）
+    // 這些設置必須在每次創建 pipeline 時重新設置
     if (config_.isRTSPOutput) {
-        // RTSP閹恒劍绁?        pipeline_.m_output_type = po_rtsp_h264;
+        // RTSP推流
+        pipeline_.m_output_type = po_rtsp_h264;
         snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
                 "%s%d", config_.rtspEndpoint.c_str(), config_.streamId);
         pipeline_.m_venc_attr.n_venc_chn = config_.streamId;
     } else if (config_.isMediaMTXOutput) {
-        // MediaMTX閹恒劑鈧?
-        // 濮ｅ繐鈧瀵岀喊鍏肩ウ娴ｈ法鏁ゆ稉宥呮倱閻?VENC channel閿涘澃treamId閿涘绱濋柆鍨帳婢舵艾鈧瀵岀喊鍏肩ウ鐞涙繄鐛?        pipeline_.m_output_type = po_mediamtx_h264;
+        // MediaMTX推送
+        // 每個主碼流使用不同的 VENC channel（streamId），避免多個主碼流衝突
+        pipeline_.m_output_type = po_mediamtx_h264;
         snprintf(pipeline_.m_venc_attr.end_point, sizeof(pipeline_.m_venc_attr.end_point), 
                 "%s", config_.mediamtxEndpoint.c_str());
-        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;  // 娴ｈ法鏁?streamId 娴ｆ粎鍋?VENC channel閿涘矂浼╅崗宥堫敘缁?
+        pipeline_.m_venc_attr.n_venc_chn = config_.streamId;  // 使用 streamId 作為 VENC channel，避免衝突
         ALOGN("[VideoStream] Stream %d MediaMTX endpoint set to: %s", 
               config_.streamId, config_.mediamtxEndpoint.c_str());
     } else if (config_.enableAI) {
-        // AI閹恒劎鎮婃潏鎾冲毉娑撶瘶V12缂傛挸鍟块崠?
+        // AI推理输出为NV12缓冲区
         pipeline_.m_output_type = po_buff_nv12;
-        pipeline_.output_func = aiInferenceCallback;  // 闁插秵鏌婄懛顓犵枂閸ョ偠顎為崙鑺ユ毄
-        // AI 濞翠椒绗夋担璺ㄦ暏 VENC閿涘本绔婚梽?VENC 闁板秶鐤?        pipeline_.m_venc_attr.n_venc_chn = -1;  // 鐟奉厾鐤嗛悙铏瑰妵閺佸牆鈧》绱濈悰銊с仛娑撳秳濞囬悽?VENC
+        pipeline_.output_func = aiInferenceCallback;  // 重新設置回調函數
+        // AI 流不使用 VENC，清除 VENC 配置
+        pipeline_.m_venc_attr.n_venc_chn = -1;  // 設置為無效值，表示不使用 VENC
         if (!aiWorker_) aiWorker_ = std::make_unique<AIWorker>(config_.streamId);
         ALOGN("[VideoStream] Setting output_func for AI stream %d", config_.streamId);
     }
     
-    // 鐟奉厾鐤?pipeline ID閿涘牆绻€闂嬪牆婀?create_pipeline 娑斿澧犵懛顓犵枂閿?
+    // 設置 pipeline ID（必須在 create_pipeline 之前設置）
     pipeline_.pipeid = config_.streamId;
     
-    // 鐟奉厾鐤嗘潛绋垮弳妞ょ偛鐎烽敍鍫熸暜閹?inputCodec=h264/h265/auto閿?
+    // 設置輸入類型（支援 inputCodec=h264/h265/auto）
     pipeline_.m_input_type = preferredInputType_;
     
-    // 閹稿缍嬮崜宥夊帳缂冾喖鍨垫慨瀣pipeline
+    // 按当前配置初始化pipeline
     configureIVPS();
     configureVDEC();
-    // AI 濞翠椒濞囬悽?po_buff_nv12閿涘奔绗夐棁鈧憰?VENC
-    // 閸欘亝婀?RTSP 閸?MediaMTX 鏉撶鍤幍宥夋付鐟?VENC
+    // AI 流使用 po_buff_nv12，不需要 VENC
+    // 只有 RTSP 和 MediaMTX 輸出才需要 VENC
     if (config_.isRTSPOutput || config_.isMediaMTXOutput) {
         configureVENC();
     } else if (config_.enableAI) {
-        // AI 濞翠緤绱扮喊杞扮箽娑撳秹鍘ょ純?VENC閿涘牅濞囬悽?po_buff_nv12閿?
-        // 濞撳懘娅庢禒璁崇秿閸欘垵鍏橀惃?VENC 闁板秶鐤?        pipeline_.m_venc_attr.n_venc_chn = -1;  // 鐟奉厾鐤嗛悙铏瑰妵閺佸牆鈧》绱濈悰銊с仛娑撳秳濞囬悽?VENC
+        // AI 流：確保不配置 VENC（使用 po_buff_nv12）
+        // 清除任何可能的 VENC 配置
+        pipeline_.m_venc_attr.n_venc_chn = -1;  // 設置為無效值，表示不使用 VENC
     }
     
-    // 閸熺喓鏁?pipeline閿涘牆绻€闂嬪牆婀?create_pipeline 娑斿澧犵懛顓犵枂閿?
+    // 啟用 pipeline（必須在 create_pipeline 之前設置）
     pipeline_.enable = 1;
-    pipeline_.n_loog_exit = 0;  // 闁插秶鐤嗛柅鈧崙鐑橆灴鐟惧矉绱欓崣鍐偓?ai_platform_RTP閿?
+    pipeline_.n_loog_exit = 0;  // 重置退出標誌（參考 ai_platform_RTP）
     
-    // 閸氼垰濮﹑ipeline
+    // 启动pipeline
     int ret = create_pipeline(&pipeline_);
     if (ret != 0) {
         ALOGE("Failed to create pipeline %d", config_.streamId);
-        pipeline_.enable = 0;  // 閸撻潧缂撴径杈ㄦ櫧閺呭倿鍣哥純?
+        pipeline_.enable = 0;  // 創建失敗時重置
         return false;
     }
     
-    // 閸掋倖鏌楅弰顖氭儊闂団偓鐟?OSD閿涙艾鍎忛崷銊ユ殙閻?AI 閺呭倹甯ユ潛澶涚礉闂傛粓鏋?AI 閺呭倸褰插〒顒冣攤閺勵垰鎯侀悙?OSD 鐏忓氦鍤у▓妯哄
+    // 判斷是否需要 OSD：僅在啟用 AI 時掛載，關閉 AI 時可測試是否為 OSD 導致殘影
     bool needOSD = config_.enableAI && !is_osd_disabled_by_env();
     if (needOSD && !osdRenderer_) {
         osdRenderer_ = make_unique<OSDRenderer>(&pipeline_);
     }
     
-    // 閸掓繂顫愰崠鏈濻D
+    // 初始化OSD
     // #region agent log
     debug_log("video_stream.cpp:562", "OSD initialization: starting", {
         {"stream_id", std::to_string(config_.streamId)},
@@ -791,14 +1195,16 @@ void VideoStream::configureIVPS() {
     ivps.n_ivps_width = config_.outputWidth;
     ivps.n_ivps_height = config_.outputHeight;
     ivps.n_ivps_fps = config_.fps;
-    // 鐠?IVPS 閸︺劑娓剁憰浣藉嚑閸戣櫣閮?RTSP/MediaMTX閿涘牅瀵岀喊鍏肩ウ閿涘妾稊鐔诲厴閸熺喎瀚婇妴?
-    // Raw 娑撹崵鈷撳ù浣烘畱 enableAI=false閿涘牅绗夐悾?OSD閿涘绲炬禒宥夋付鐟?IVPS 閻垻鏁撻崣顖滄硶绾拌壈鍑犻崙鎭掆偓?
+    // 讓 IVPS 在需要輸出給 RTSP/MediaMTX（主碼流）時也能啟動。
+    // Raw 主碼流的 enableAI=false（不畫 OSD）但仍需要 IVPS 產生可編碼輸出。
     ivps.n_fifo_count =
         (config_.enableAI || config_.isRTSPOutput || config_.isMediaMTXOutput) ? 1 : 0;
-    bool needOSD = config_.enableAI && !is_osd_disabled_by_env();  // 閸欘垳鏁?AX_DISABLE_OSD=1 瀵嘲鍩楅梻婊堟瀱 OSD
-    // 閸欘亙濞囬悽?1 閸?OSD 閸椻偓閸╃喍鐢崣顏呮纯閺傛媽鈹庨崡鈧崺鐕傜礉闁灝鍘ゆ径姘磥閸╃喐婀崥灞绢劄閺囧瓨鏌婄亸搴ゅ毀 IVPS 閸氬牊鍨氶懞鍗炵潌/閼规彃顢?    ivps.n_osd_rgn = needOSD ? 1 : 0;
+    bool needOSD = config_.enableAI && !is_osd_disabled_by_env();  // 可由 AX_DISABLE_OSD=1 強制關閉 OSD
+    // 只使用 1 個 OSD 區域並只更新該區域，避免多區域未同步更新導致 IVPS 合成花屏/色塊
+    ivps.n_osd_rgn = needOSD ? 1 : 0;
     
-    // 鐟锋﹢瀵?IVPS 闁板秶鐤?    ALOGN("[VideoStream] Stream %d IVPS config: grp=%d, size=%dx%d, fps=%d, n_fifo_count=%d, n_osd_rgn=%d, enableAI=%d", 
+    // 記錄 IVPS 配置
+    ALOGN("[VideoStream] Stream %d IVPS config: grp=%d, size=%dx%d, fps=%d, n_fifo_count=%d, n_osd_rgn=%d, enableAI=%d", 
           config_.streamId, ivps.n_ivps_grp, ivps.n_ivps_width, ivps.n_ivps_height, 
           ivps.n_ivps_fps, ivps.n_fifo_count, ivps.n_osd_rgn, config_.enableAI ? 1 : 0);
 }
@@ -819,7 +1225,7 @@ void VideoStream::resolveInputCodecConfig() {
     autoCodecFallbackEnabled_ = false;
     autoCodecFallbackSwitched_ = false;
     if (codec == "h265" || codec == "hevc") {
-        // 閻╊喖澧?pipeline_input_e 鐏忔碍婀幓鎰返 H265 鐏忓秵鍣虫潛绋垮弳妞ょ偛鐎烽敍灞藉帥鐎瑰鍙忛梽宥囩閻?H264 闁灝鍘ょ欢銊劏婢惰鲸鏅介妴?
+        // 目前 pipeline_input_e 尚未提供 H265 對應輸入類型，先安全降級為 H264 避免編譯失敗。
         ALOGW("[VideoStream] Stream %d input codec '%s' requested but H265 VDEC input type is unavailable, fallback to H264",
               config_.streamId, codec.c_str());
         preferredInputType_ = pi_vdec_h264;
@@ -833,7 +1239,7 @@ bool VideoStream::tryAutoCodecFallbackLocked() {
         return false;
     }
 
-    // 閻╊喖澧犳稉宥嗘暜閹?H265 VDEC input type閿涘奔绻氶悾娆戝閹卞绲炬稉宥呮鐟箓鍣稿?pipeline閵?
+    // 目前不支援 H265 VDEC input type，保留狀態但不嘗試重建 pipeline。
     ALOGW("[VideoStream] Stream %d input codec auto-fallback skipped: H265 VDEC input type is unavailable",
           config_.streamId);
     autoCodecFallbackSwitched_ = true;
@@ -854,8 +1260,6 @@ void VideoStream::configureVENC() {
               config_.streamId, venc.end_point, venc.n_venc_chn);
     }
 }
-
-
 
 
 
