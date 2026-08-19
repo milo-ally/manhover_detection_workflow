@@ -47,6 +47,7 @@ model_train/*Dataset*/
 model_train/dataset/
 model_train/datasets/
 model_convert/dataset/
+model_convert/*/dataset/
 
 # Conversion/simulation generated artifacts
 model_convert/models/*
@@ -66,6 +67,7 @@ model_val/*/images/*
 model_val/*/labels/*
 model_val/*/model/*
 model_val/*/runs/*
+model_deployment/*/test.mp4
 
 # Keep placeholder .gitkeep files (必须写在忽略规则之后)
 !**/.gitkeep

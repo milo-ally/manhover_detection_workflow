@@ -1209,7 +1209,7 @@ void VideoStreamManager::cleanupOSDForStream(int aiStreamId) {
             auto elapsed = std::chrono::steady_clock::now() - start;
             if (elapsed > std::chrono::milliseconds(100)) {
                 ALOGW("[OSD] Thread join took %lld ms for stream %d", 
-                      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
+                      static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()),
                       aiStreamId);
             }
         }

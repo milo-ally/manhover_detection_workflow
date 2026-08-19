@@ -427,7 +427,7 @@ int _create_vo_hdmi(pipeline_t *pipe)
         {
             ALOGI("layer %d: [(%d, %d) %dx%d], dispatch mode %d, layer depth %d, ChnNr %d, part mode %d, tolerance %d",
                   gHdmiAttr[pipe->m_vo_attr.hdmi.portid].voLayer, stLayerAttr.stDispRect.u32X, stLayerAttr.stDispRect.u32Y, stLayerAttr.stDispRect.u32Width,
-                  stLayerAttr.stDispRect.u32Height, stLayerAttr.u32DispatchMode, stLayerAttr.u32FifoDepth, gHdmiAttr[pipe->m_vo_attr.hdmi.portid].m_arrChns.size(),
+                  stLayerAttr.stDispRect.u32Height, stLayerAttr.u32DispatchMode, stLayerAttr.u32FifoDepth, static_cast<int>(gHdmiAttr[pipe->m_vo_attr.hdmi.portid].m_arrChns.size()),
                   stLayerAttr.enPartMode, stLayerAttr.u32Toleration);
         }
 
