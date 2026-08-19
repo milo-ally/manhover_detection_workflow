@@ -1,152 +1,139 @@
-# RK3588 基础推流 FLOW1
+# RK3588 基础推流 FLOW1-SSH-TUNNEL
 
-本文档是 RK3588 的基础 RTSP 输入/输出链路。RK3588 侧的实际井盖 AI 流程序
-请使用同目录 `manhole_cover_detection` 小工程和 `FLOW2.md`；本文件中的
-Python 代码只用于验证输入流和最小推流链路。
+本文档是 RK3588 的基础 RTSP 输入/输出链路，使用 SSH 双向端口转发，
+不依赖主机与板端互相 ping 通。RK3588 侧的井盖 AI 程序请使用同目录
+`manhole_cover_detection` 和 `FLOW2.md`。
 
-环境前提: 
+## 1. 主机准备 MediaMTX 和输入流
 
-- 主机，边缘设备处在同一个局域网
-- 两边可以互相ping通
+主机为 Windows，使用 Windows amd64 版 MediaMTX 和 FFmpeg。
 
-## 1. 主机安装 (MediaMTX + FFMpeg)
+### 1.1 MediaMTX 配置
 
-### 1.1 安装 FFmpeg
-
-```bash 
-sudo apt update 
-sudo apt install ffmpeg -y 
-```
-
-校验是否安装成功
-
-```bash
-ffmpeg --version 
-ffmpeg -encoders | grep libx264 # 出现 libx264 代表编码器正常
-```
-
-### 1.2 安装 MediaMTX
-
-可以直接下载release二进制，省去编译
-
-```bash
-wget https://github.com/bluenviron/mediamtx/releases/download/v1.10.0/mediamtx_v1.10.0_linux_amd64.tar.gz
-tar -xvzf mediamtx_v1.10.0_linux_amd64.tar.gz
-```
-
-解压包内直接包含 `mediamtx` 和 `mediamtx.yml`，不需要进入
-`mediamtx_v1.10.0_linux_amd64` 子目录。MediaMTX 1.10.0 使用 `protocols`
-配置 RTSP 传输方式；将配置文件中的这一行改为 TCP：
+将主机 `mediamtx.yml` 的 RTSP 配置设为：
 
 ```yml
 protocols: [tcp]
+rtspAddress: :554
 ```
 
-`paths` 保持默认的 `all_others:` 配置即可，不要改成文档旧版本中的
-`paths: all:`。
+`paths` 保持默认的 `all_others:` 配置。Windows 防火墙放行 `554/TCP`。
 
-### 1.3 主机防火墙放行8554端口
+启动主机 MediaMTX，并保持窗口运行：
+
+```powershell
+.\mediamtx.exe mediamtx.yml
+```
+
+看到 `RTSP listener opened on :554` 即启动成功。
+
+### 1.2 主机推送输入测试视频
+
+主机本地推流地址必须是 `127.0.0.1:554`，不能使用主机局域网 IP：
+
+```powershell
+ffmpeg -re -stream_loop -1 -i .\test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:554/src_in
+```
+
+主机本地验证输入：
+
+```powershell
+ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:554/src_in
+```
+
+### 1.3 建立 SSH 双向隧道
+
+新开独立 PowerShell 窗口，保持该窗口运行：
+
+```powershell
+ssh -R 8556:127.0.0.1:554 -L 8557:127.0.0.1:8554 root@172.19.30.3
+```
+
+- `-R 8556:127.0.0.1:554`：将主机输入端口映射到 RK3588 的 `8556`。
+- `-L 8557:127.0.0.1:8554`：将 RK3588 输出端口映射到主机的 `8557`。
+
+登录成功且没有 `remote port forwarding failed` 后，隧道才可用。
+隧道窗口关闭后两个端口映射立即失效。
+
+## 2. RK3588 板端准备
+
+### 2.1 安装 FFmpeg
 
 ```bash
-sudo ufw allow 8554/tcp
+sudo apt update
+sudo apt install -y ffmpeg
 ```
 
-### 1.4 启动MediaMTX
+确认板端存在 Rockchip 硬件编码器：
+
+```bash
+ffmpeg -encoders | grep -E 'h264_rkmpp|hevc_rkmpp'
+```
+
+本工程在线输出使用 `h264_rkmpp`。不要用只包含软件编码器的 FFmpeg 替换
+板端 multimedia FFmpeg。
+
+### 2.2 部署板端 MediaMTX
+
+板端 MediaMTX 只负责输出 AI 结果流，监听 `8554`：
+
+```bash
+wget https://github.com/bluenviron/mediamtx/releases/download/v1.10.0/mediamtx_v1.10.0_linux_arm64.tar.gz
+tar -xvzf mediamtx_v1.10.0_linux_arm64.tar.gz
+```
+
+板端 `mediamtx.yml` 至少配置：
+
+```yml
+protocols: [tcp]
+rtspAddress: :8554
+```
+
+启动并保持运行：
 
 ```bash
 ./mediamtx mediamtx.yml
 ```
 
-看到日志： `RTSP listener opened on :8554`，启动成功。这个终端窗口不要关闭。
+### 2.3 验证 SSH 隧道输入
 
-### 1.5 主机推流 `test.mp4`
-
-先获取主机在局域网中的 IP（把下面的 `HOST_IP` 替换成实际值）：
+板端只能使用隧道本地端口 `8556`，不使用主机 IP，也不执行 ping：
 
 ```bash
-hostname -I
+ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8556/src_in
 ```
 
-推流地址必须使用主机局域网 IP，不能使用只对本机有效的 `127.0.0.1`：
+## 3. 板端最小推流 demo
 
-```bash
-ffmpeg -re -stream_loop -1 -i ./test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://HOST_IP:8554/src_in
-```
-
-如果当前目录不是 `mediamtx` 和 `test.mp4` 所在目录，请使用绝对路径，或先执行：
-
-```bash
-cd /path/to/model_deployment
-```
-
-### 1.6 主机本地验证输入流
-
-```bash
-ffplay rtsp://127.0.0.1:8554/src_in -rtsp_transport tcp
-```
-
-可以正常播放视频，代表上游链路没问题。无图形界面时可使用无窗口校验：
-
-```bash
-ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8554/src_in
-```
-
-最后，边缘设备应读取：
-`rtsp://HOST_IP:8554/src_in`。主机上的 MediaMTX 和 FFmpeg 推流终端都不要关闭。
-
-## 2. 边缘设备
-
-### 2.1 安装ffmpeg
-
-```bash
-sudo apt update 
-sudo apt install ffmpeg -y 
-```
-
-### 2.2 设备网络校验
-
-```bash 
-ping HOST_IP
-ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://192.168.0.129:8554/src_in 
-# 预计输出: 
-## index=0
-## codec_name=hevc
-## width=1138
-## height=720
-## index=1
-## codec_name=aac
-```
-
-### 2.3 边缘设备 Python 最小 demo
-
-保存下面脚本为 `rtsp_demo.py`：
+保存为 `rtsp_demo.py`。输入从 `8556` 读取，输出发布到板端 MediaMTX 的
+`8554`；RK3588 使用 `h264_rkmpp`：
 
 ```python
 import cv2
 import subprocess
 
-HOST_IP = "192.168.0.129"
-INPUT_URL = f"rtsp://{HOST_IP}:8554/src_in"
-OUTPUT_URL = f"rtsp://{HOST_IP}:8554/ai_out"
+INPUT_URL = "rtsp://127.0.0.1:8556/src_in"
+OUTPUT_URL = "rtsp://127.0.0.1:8554/ai_out"
 
-cap = cv2.VideoCapture(INPUT_URL)
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+cap = cv2.VideoCapture(INPUT_URL, cv2.CAP_FFMPEG)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+ret, frame = cap.read()
+if not ret:
+    raise RuntimeError("读取 RTSP 失败，请检查 MediaMTX、FFmpeg 推流和 SSH 隧道")
 
+height, width = frame.shape[:2]
 ffmpeg = subprocess.Popen([
     "ffmpeg", "-f", "rawvideo", "-pix_fmt", "bgr24",
     "-s", f"{width}x{height}", "-r", "25", "-i", "-",
-    "-an", "-c:v", "h264_rkmpp", "-f", "rtsp",
-    "-rtsp_transport", "tcp", OUTPUT_URL,
+    "-an", "-c:v", "h264_rkmpp", "-pix_fmt", "yuv420p",
+    "-f", "rtsp", "-rtsp_transport", "tcp", OUTPUT_URL,
 ], stdin=subprocess.PIPE)
 
 while True:
     ret, frame = cap.read()
     if not ret:
-        print("读取流失败")
         break
-
-    # 在这里插入 YOLO 推理，并在 frame 上绘制检测框。
+    # 在这里插入 YOLO 推理，并将检测框绘制到 frame。
     ffmpeg.stdin.write(frame.tobytes())
 
 cap.release()
@@ -160,14 +147,29 @@ ffmpeg.wait()
 python3 rtsp_demo.py
 ```
 
-主机上使用 `ffplay` 验证输出画面：
-
-```bash
-ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
-```
-
-无图形界面时使用 `ffprobe` 验证输出流：
+### 3.1 板端验证输出
 
 ```bash
 ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8554/ai_out
 ```
+
+### 3.2 主机查看输出
+
+主机通过 SSH `-L` 映射后的 `8557` 查看：
+
+```powershell
+ffplay -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out
+```
+
+无图形界面时：
+
+```powershell
+ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8557/ai_out
+```
+
+## 重要注意事项
+
+1. RK3588 输入固定为 `127.0.0.1:8556`，输出固定为 `127.0.0.1:8554`。
+2. 主机查看输出固定为 `127.0.0.1:8557`。
+3. SSH、主机 MediaMTX、主机 FFmpeg、板端 MediaMTX 和推理程序的窗口都不能关闭。
+4. VLAN 隔离下 ping 失败是正常现象，不要通过添加路由修复。

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <cmath>
@@ -60,6 +61,17 @@ static bool isRtspUrl(const std::string& value) {
     return value.rfind("rtsp://", 0) == 0 || value.rfind("rtsps://", 0) == 0;
 }
 
+static bool openInputVideo(cv::VideoCapture& reader, const std::string& inputPath) {
+    if (!isRtspUrl(inputPath)) {
+        return reader.open(inputPath);
+    }
+
+    // SSH port forwarding carries TCP only. Force OpenCV's FFmpeg backend to
+    // avoid an UDP RTP side channel that cannot cross the tunnel.
+    setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
+    return reader.open(inputPath, cv::CAP_FFMPEG);
+}
+
 static std::string shellQuote(const std::string& value) {
     std::string quoted = "'";
     for (char character : value) {
@@ -77,7 +89,7 @@ static void printUsage(const char* program) {
     std::fprintf(stderr,
                  "usage: %s --input input.mp4|input.rtsp --output output.mp4|output.rtsp "
                  "--model model.axmodel [--plugin libmanhole_plugin.so] "
-                 "[--conf-thres 0.25] [--iou-thres 0.45] [--encoder libx264]\n",
+                 "[--conf-thres 0.25] [--iou-thres 0.45] [--encoder mpeg4]\n",
                  program);
 }
 
@@ -88,7 +100,7 @@ static bool parseArgs(int argc, char** argv, std::string& inputPath,
     pluginPath = "./libmanhole_plugin.so";
     confThreshold = 0.25f;
     iouThreshold = 0.45f;
-    encoder = "libx264";
+    encoder = "mpeg4";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -156,7 +168,11 @@ int main(int argc, char** argv) {
     setenv("MANHOLE_CONF_THRESH", confValue.c_str(), 1);
     setenv("MANHOLE_NMS_THRESH", iouValue.c_str(), 1);
 
-    cv::VideoCapture reader(inputPath);
+    cv::VideoCapture reader;
+    if (isRtspUrl(inputPath)) {
+        std::fprintf(stdout, "[INFO] rtsp_input_transport=tcp\n");
+    }
+    openInputVideo(reader, inputPath);
     if (!reader.isOpened()) {
         std::fprintf(stderr, "failed to open input video: %s\n", inputPath.c_str());
         return 1;
@@ -179,8 +195,11 @@ int main(int argc, char** argv) {
                 << " -s " << width << "x" << height
                 << " -r " << fps << " -i pipe:0 -an"
                 << " -c:v " << shellQuote(encoder)
-                << " -preset ultrafast -tune zerolatency"
-                << " -pix_fmt yuv420p -f rtsp -rtsp_transport tcp "
+                << " -b:v 4000k";
+        if (encoder == "libx264") {
+            command << " -preset ultrafast -tune zerolatency";
+        }
+        command << " -pix_fmt yuv420p -f rtsp -rtsp_transport tcp "
                 << shellQuote(outputPath);
         std::fprintf(stdout, "[INFO] output_mode=rtsp encoder=%s\n", encoder.c_str());
         std::fprintf(stdout, "[INFO] ffmpeg command: %s\n", command.str().c_str());

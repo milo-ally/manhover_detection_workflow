@@ -224,7 +224,64 @@ Runtime 应为 ARM aarch64。若使用交叉编译器，可通过 CMake toolchai
 
 后续接入告警、推流或插件时，在 `src/main.cpp` 中 `detector.infer()` 返回后使用 `frame` 和 `detections`；先保持离线视频链路稳定，再替换输入输出模块。
 
-## 5. 交付检查
+## 5. SSH-TUNNEL 实时推流部署
+
+实时推流按照 [model_deployment/rk3588/FLOW1.md](model_deployment/rk3588/FLOW1.md)
+和 [model_deployment/rk3588/FLOW2.md](model_deployment/rk3588/FLOW2.md) 执行。
+当前链路不使用局域网直连，也不要求主机和 RK3588 互相 ping 通。
+
+### 5.1 端口约定
+
+```text
+主机 MediaMTX 输入: 554
+RK3588 隧道输入:    127.0.0.1:8556/src_in
+RK3588 输出:        127.0.0.1:8554/ai_out
+主机查看输出:       127.0.0.1:8557/ai_out
+```
+
+### 5.2 启动顺序
+
+主机启动 MediaMTX，配置 `protocols: [tcp]`、`rtspAddress: :554`，再推送测试视频：
+
+```powershell
+ffmpeg -re -stream_loop -1 -i .\test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:554/src_in
+```
+
+新开 PowerShell 窗口建立并保持 SSH 隧道：
+
+```powershell
+ssh -R 8556:127.0.0.1:554 -L 8557:127.0.0.1:8554 root@172.19.30.3
+```
+
+RK3588 启动本地 MediaMTX 后，先验证输入：
+
+```bash
+ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8556/src_in
+```
+
+### 5.3 启动 RK3588 AI 流
+
+```bash
+./bin/debug_demo \
+  --model models/manhole-cover-yolo11s-production.rknn \
+  --input rtsp://127.0.0.1:8556/src_in \
+  --output rtsp://127.0.0.1:8554/ai_out \
+  --conf-thres 0.25 \
+  --iou-thres 0.45 \
+  --max-det 100
+```
+
+在线输出使用 RK3588 板端 `h264_rkmpp` 编码器。主机查看或录制必须使用 SSH
+映射端口 `8557`：
+
+```bash
+ffplay -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out
+ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8557/ai_out -c copy ai_result.mp4
+```
+
+隧道窗口关闭、主机 MediaMTX 停止或板端 MediaMTX 停止，相关 RTSP 端口都会失效。
+
+## 6. 交付检查
 
 ```text
 [ ] RK3588 ONNX、校准集、验证集和模型均为本目录独立副本
@@ -234,5 +291,7 @@ Runtime 应为 ARM aarch64。若使用交叉编译器，可通过 CMake toolchai
 [ ] RK3588 板端 RKNN Lite 精度验证完成
 [ ] C++ 程序在板端成功编译
 [ ] 离线输入视频成功生成带框输出视频
+[ ] SSH 隧道输入 `8556/src_in` 可被 RK3588 读取
+[ ] 主机通过 `8557/ai_out` 可查看和录制 AI 输出
 [ ] 记录平均/P95 推理耗时、内存和连续运行稳定性
 ```

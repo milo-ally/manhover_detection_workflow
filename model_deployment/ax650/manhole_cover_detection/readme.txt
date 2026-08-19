@@ -80,19 +80,23 @@ SDK 头文件已经复制到 msp_sdk/include。AX650N 动态库通常位于板�
 
 RTSP 输入和输出：
 
+FLOW1 使用 SSH 隧道时，AX650 端必须访问隧道本地端口：输入为
+`127.0.0.1:8556`，输出为 `127.0.0.1:8554`。主机端通过 `-L` 映射后的
+`127.0.0.1:8557` 查看输出，不要在 AX650 上使用主机局域网 IP。
+
   ./debug_demo \
-    --input rtsp://192.168.0.129:8554/src_in \
-    --output rtsp://192.168.0.129:8554/ai_out \
+    --input rtsp://127.0.0.1:8556/src_in \
+    --output rtsp://127.0.0.1:8554/ai_out \
     --model /tmp/manhole-cover-yolo11s-production.axmodel \
     --conf-thres 0.25 \
     --iou-thres 0.45 \
-    --encoder libx264
+    --encoder mpeg4
 
 RTSP 模式由 FFmpeg 从 stdin 接收绘制后的 BGR 帧，再编码为 H.264 推送到
-MediaMTX；AX650 不使用 RK3588 的 `h264_rkmpp`。运行前确认板端 FFmpeg
-包含所选编码器：
+MediaMTX；AX650 不使用 RK3588 的 `h264_rkmpp`。默认使用板端 FFmpeg
+内置的 `mpeg4` 编码器，运行前确认：
 
-  ffmpeg -encoders | grep libx264
+  ffmpeg -encoders | grep mpeg4
 
 五、处理流程
 
@@ -141,8 +145,9 @@ AI_OBJ_T 中的 x、y、w、h 是 0 到 1 的归一化坐标，表示左上角�
 
 4. RTSP 输出没有画面
 
-确认 `--output` 是 `rtsp://` URL，MediaMTX 正在运行，主机防火墙已放行
-8554/tcp，并检查 `ffmpeg -encoders | grep libx264`。查看程序打印的
+确认 `--output` 是 `rtsp://` URL，AX650 本地 MediaMTX 正在运行并监听
+8554/tcp，SSH 隧道的 `-L 8557` 映射仍然存在，并检查
+`ffmpeg -encoders | grep mpeg4`。查看程序打印的
 `[INFO] ffmpeg command` 和 FFmpeg warning。
 
 5. 输出视频无法打开

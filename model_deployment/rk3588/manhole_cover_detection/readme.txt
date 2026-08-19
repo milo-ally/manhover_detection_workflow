@@ -89,6 +89,24 @@ cmake -S . -B build -DOpenCV_DIR=/path/to/opencv/lib/cmake/opencv4
 
 如果板端 OpenCV 没有 MP4 编码器，先使用系统支持的输入格式，或在 `src/main.cpp` 将 `mp4v` 替换为板端可用的编码器并使用对应扩展名。
 
+## SSH 隧道 RTSP 运行
+
+按上级 `FLOW1.md` 建立 SSH 隧道后，RK3588 端不要使用主机局域网 IP：
+
+```bash
+./bin/debug_demo \
+  --model models/manhole-cover-yolo11s-production.rknn \
+  --input rtsp://127.0.0.1:8556/src_in \
+  --output rtsp://127.0.0.1:8554/ai_out \
+  --conf-thres 0.25 \
+  --iou-thres 0.45 \
+  --max-det 100
+```
+
+程序使用板端 `h264_rkmpp` 编码器向本地 MediaMTX 发布输出。RK3588 上验证
+输入使用 `127.0.0.1:8556`；主机通过 SSH `-L` 映射后的
+`rtsp://127.0.0.1:8557/ai_out` 查看结果。
+
 ## 实现注意事项
 
 - 程序启动时查询 RKNN 输入输出属性，兼容 NCHW/NHWC 输入。

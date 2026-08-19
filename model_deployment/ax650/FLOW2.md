@@ -13,7 +13,7 @@ RK3588 的 RKNPU2、`h264_rkmpp` 或 `.rknn` 文件。
 
 ```text
 离线模式：MP4 -> OpenCV -> AX Engine -> 画框 -> MP4
-在线模式：RTSP -> OpenCV -> AX Engine -> 画框 -> FFmpeg/libx264 -> RTSP/MediaMTX
+在线模式：RTSP -> OpenCV -> AX Engine -> 画框 -> FFmpeg/mpeg4 -> RTSP/MediaMTX
 ```
 
 ## 1. 流程总览
@@ -21,7 +21,7 @@ RK3588 的 RKNPU2、`h264_rkmpp` 或 `.rknn` 文件。
 ```text
 主机 test.mp4
     |
-    | FFmpeg 推送 rtsp://HOST_IP:8554/src_in
+     | FFmpeg 推送 rtsp://127.0.0.1:554/src_in
     v
 主机 MediaMTX
     |
@@ -37,16 +37,16 @@ AI_RESULT_T
     v
 绘制后的 BGR 帧
     |
-    | FFmpeg stdin，libx264，RTSP/TCP
+    | FFmpeg stdin，mpeg4，RTSP/TCP
     v
-主机 MediaMTX:8554/ai_out
+AX650 本地 MediaMTX:8554/ai_out
     |
-    +--> 主机 ffplay 查看
-    +--> 主机 ffmpeg 录制
+    +--> SSH -L 8557 -> 主机 ffplay 查看
+    +--> SSH -L 8557 -> 主机 ffmpeg 录制
 ```
 
-AX650 小工程的在线输出使用 FFmpeg 软件编码器 `libx264`。不要把 RK3588
-文档中的 `h264_rkmpp` 命令复制到这里。
+AX650 小工程的在线输出默认使用板端 FFmpeg 内置的 `mpeg4` 编码器，避免依赖
+`libx264`。不要把 RK3588 文档中的 `h264_rkmpp` 命令复制到这里。
 
 ## 2. 固定路径和模型
 
@@ -83,7 +83,7 @@ plugins/model_manhole_cover.cpp
 libmanhole_plugin.so
 ```
 
-## 3. 主机准备 MediaMTX 和输入流
+## 3. 主机准备 MediaMTX、输入流和 SSH 隧道
 
 主机安装：
 
@@ -101,50 +101,40 @@ sudo apt install -y ffmpeg
 ffmpeg --version
 ```
 
-获取主机局域网 IP：
-
-```bash
-hostname -I
-```
-
-例如主机输出：
-
-```text
-192.168.0.129 172.17.0.1
-```
-
-使用 `192.168.0.129`，不要使用 `172.17.0.1` 或 `127.0.0.1` 作为 AX650
-连接主机时的地址。
-
 按照 `FLOW1.md` 下载并启动 MediaMTX：
 
 ```bash
 ./mediamtx mediamtx.yml
 ```
 
-另开主机终端推送输入测试视频：
+新开一个 PowerShell 窗口建立双向 SSH 隧道，并保持该窗口运行：
+
+```powershell
+ssh -R 8556:127.0.0.1:554 -L 8557:127.0.0.1:8554 root@172.19.30.3
+```
+
+其中 `8556` 让 AX650 访问主机输入流，`8557` 让主机访问 AX650 输出流。
+隧道窗口关闭后两个映射端口都会立即失效。
+
+另开主机终端推送输入测试视频。主机 MediaMTX 的输入端口是本机 `554`：
 
 ```bash
-ffmpeg -re -stream_loop -1 -i ./test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://192.168.0.129:8554/src_in
+ffmpeg -re -stream_loop -1 -i ./test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:554/src_in
 ```
 
 输入流验证：
 
 ```bash
-ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8554/src_in
+ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:554/src_in
 ```
 
-AX650 上验证：
+按 `FLOW1.md` 建立 SSH 隧道后，AX650 上验证输入：
 
 ```bash
-ping 192.168.0.129
+ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8556/src_in
 ```
 
-```bash
-ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://192.168.0.129:8554/src_in
-```
-
-只有 AX650 能读取 `src_in` 后，才继续运行 AI 程序。
+只有 AX650 能通过 `127.0.0.1:8556` 读取 `src_in` 后，才继续运行 AI 程序。
 
 ## 4. AX650 编译环境
 
@@ -238,7 +228,7 @@ bin/libmanhole_plugin.so
 --plugin      插件路径，默认 ./libmanhole_plugin.so
 --conf-thres  置信度阈值，默认 0.25
 --iou-thres   NMS IoU 阈值，默认 0.45
---encoder     RTSP 输出编码器，默认 libx264
+--encoder     RTSP 输出编码器，默认 mpeg4
 ```
 
 不再支持位置参数。输入、输出和模型都必须使用选项名。
@@ -271,8 +261,8 @@ OpenCV BGR frame -> MP4
 
 ```text
 ffmpeg -f rawvideo -pix_fmt bgr24 -s WIDTHxHEIGHT -r FPS -i pipe:0 \
-  -an -c:v libx264 -preset ultrafast -tune zerolatency \
-  -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://HOST_IP:8554/ai_out
+  -an -c:v mpeg4 -b:v 4000k \
+  -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
 ```
 
 程序将“已经完成推理并绘制检测框”的 BGR 帧写入 FFmpeg stdin。当前不转发
@@ -329,10 +319,10 @@ ffprobe -v error -show_entries stream=codec_name,width,height -of default=noprin
 
 ## 8. 在线 AI 流运行
 
-先确认 AX650 上的 FFmpeg 有 `libx264`：
+先确认 AX650 上的 FFmpeg 有 `mpeg4`：
 
 ```bash
-ffmpeg -encoders | grep libx264
+ffmpeg -encoders | grep mpeg4
 ```
 
 进入程序目录并设置运行库：
@@ -348,14 +338,14 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 启动在线 AI 流：
 
 ```bash
-./debug_demo --input rtsp://192.168.0.129:8554/src_in --output rtsp://192.168.0.129:8554/ai_out --model /tmp/manhole-cover-yolo11s-production.axmodel --conf-thres 0.25 --iou-thres 0.45 --encoder libx264
+./debug_demo --input rtsp://127.0.0.1:8556/src_in --output rtsp://127.0.0.1:8554/ai_out --model /tmp/manhole-cover-yolo11s-production.axmodel --conf-thres 0.25 --iou-thres 0.45 --encoder mpeg4
 ```
 
 预期日志：
 
 ```text
-[INFO] output_mode=rtsp encoder=libx264
-[INFO] ffmpeg command: ffmpeg ... rtsp://192.168.0.129:8554/ai_out
+[INFO] output_mode=rtsp encoder=mpeg4
+[INFO] ffmpeg command: ffmpeg ... rtsp://127.0.0.1:8554/ai_out
 [ManholeCover] thresholds: conf=0.250 nms=0.450
 [INFO] frame=1 detections=...
 ```
@@ -367,7 +357,7 @@ export LD_LIBRARY_PATH=$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH
 主机上查看输出 AI 流：
 
 ```bash
-ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
+ffplay -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out
 ```
 
 如果主机没有 `ffplay`，安装完整 FFmpeg：
@@ -379,13 +369,13 @@ sudo apt install -y ffmpeg
 无图形界面时检查输出流：
 
 ```bash
-ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8554/ai_out
+ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8557/ai_out
 ```
 
 录制带框结果：
 
 ```bash
-ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8554/ai_out -c copy ax650_ai_result.mp4
+ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8557/ai_out -c copy ax650_ai_result.mp4
 ```
 
 停止录制不会自动停止 AX650 推理程序。
@@ -394,17 +384,14 @@ ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8554/ai_out -c copy ax650_ai_r
 
 ### 10.1 `src_in` 读取失败
 
-在 AX650 执行：
+在 AX650 执行（先确认 SSH 隧道仍在运行）：
 
 ```bash
-ping 192.168.0.129
+ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8556/src_in
 ```
 
-```bash
-ffprobe -v error -rtsp_transport tcp rtsp://192.168.0.129:8554/src_in
-```
-
-确认使用的是主机局域网 IP，不是 `127.0.0.1`、`172.17.0.1`。
+不要在 AX650 上 ping 主机或使用主机局域网 IP；本方案只检查
+`127.0.0.1:8556` 的 TCP RTSP 流。
 
 ### 10.2 找不到 AX 运行库
 
@@ -444,20 +431,20 @@ ls -lh /tmp/manhole-cover-yolo11s-production.axmodel
 先检查 AX650：
 
 ```bash
-ffmpeg -encoders | grep libx264
+ffmpeg -encoders | grep mpeg4
 ```
 
 再查看程序打印的完整 FFmpeg 命令和 warning。确认主机 MediaMTX 正在运行，
-并且输出地址是：
-
-```text
-rtsp://192.168.0.129:8554/ai_out
-```
-
-主机本地查看时才使用：
+并且 AX650 程序的输出地址是：
 
 ```text
 rtsp://127.0.0.1:8554/ai_out
+```
+
+主机通过 SSH `-L 8557` 查看时使用：
+
+```text
+rtsp://127.0.0.1:8557/ai_out
 ```
 
 ### 10.6 输出有视频但没有框
@@ -486,7 +473,7 @@ rtsp://127.0.0.1:8554/ai_out
 [ ] debug_demo 成功加载 AXModel 和 libmanhole_plugin.so
 [ ] 离线模式生成 output_boxed.mp4
 [ ] 离线视频中能看到检测框、类别和置信度
-[ ] 在线模式启动 FFmpeg/libx264
+[ ] 在线模式启动 FFmpeg/mpeg4
 [ ] MediaMTX 中出现 ai_out
 [ ] 主机 ffplay 可以看到 ai_out
 [ ] ai_out 中检测框与离线模式一致

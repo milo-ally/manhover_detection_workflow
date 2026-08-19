@@ -297,13 +297,33 @@ export LD_LIBRARY_PATH="$PWD/bin:/soc/lib:/usr/lib:$LD_LIBRARY_PATH"
 
 完整流式工程位于 `model_deployment/ax650/device_side/`，负责 RTSP 输入、AX 视频链路、插件加载、OSD 和推流。井盖插件注册、配置和编译说明见 [model_deployment/ax650/FLOW1.md](model_deployment/ax650/FLOW1.md)。
 
-主机推流到边缘设备时，`HOST_IP` 必须填写主机局域网地址，例如 `192.168.0.129`；不要填写 Docker 网桥地址 `172.17.0.1`。边缘设备读取：
+当前推流链路使用 SSH 双向端口转发，不要求主机和 AX650 互相 ping 通。
+按 [model_deployment/ax650/FLOW1.md](model_deployment/ax650/FLOW1.md) 建立隧道：
 
-```text
-rtsp://192.168.0.129:8554/src_in
+```powershell
+ssh -R 8556:127.0.0.1:554 -L 8557:127.0.0.1:8554 root@172.19.30.3
 ```
 
-先用 `ffprobe -rtsp_transport tcp` 验证输入流，再启动板端程序。部署链路和端口配置完成后，用主机 `ffplay` 或 `ffprobe` 验证输出流。
+AX650 端读取隧道输入：
+
+```text
+rtsp://127.0.0.1:8556/src_in
+```
+
+AX650 本地 MediaMTX 输出到：
+
+```text
+rtsp://127.0.0.1:8554/ai_out
+```
+
+主机通过 SSH `-L` 映射后的地址查看：
+
+```text
+rtsp://127.0.0.1:8557/ai_out
+```
+
+先在 AX650 执行 `ffprobe -rtsp_transport tcp` 验证 `8556/src_in`，再启动板端程序。
+SSH、主机 MediaMTX、主机推流 FFmpeg 和板端 MediaMTX 窗口都不能关闭。
 
 ## 7. 交付检查
 

@@ -6,9 +6,9 @@ C++/RKNPU2 完成完整的 AI 流：
 ```text
 主机 test.mp4
     |
-    | FFmpeg 推送 src_in
+    | FFmpeg 推送到主机 554/src_in
     v
-主机 MediaMTX:8554
+主机 MediaMTX:554
     |
     | RTSP/TCP
     v
@@ -20,46 +20,30 @@ RK3588 OpenCV VideoCapture
     |
     | BGR rawvideo 管道 -> FFmpeg h264_rkmpp
     v
-主机 MediaMTX:8554/ai_out
+RK3588 本地 MediaMTX:8554/ai_out
     |
-    +--> 主机 ffplay 查看
-    +--> 主机 ffmpeg 录制结果文件
+    +--> SSH -L 8557 -> 主机 ffplay 查看
+    +--> SSH -L 8557 -> 主机 ffmpeg 录制结果文件
 ```
 
 ## 1. 前置条件
 
-主机和 RK3588 必须在同一个局域网中，并且可以互相 `ping`。主机侧的
-MediaMTX、输入推流命令按照本目录的 `FLOW1.md` 执行。
-
-主机 IP 以 `hostname -I` 获取。例如：
-
-```bash
-hostname -I
-```
-
-如果主机输出包含：
-
-```text
-192.168.0.129 172.17.0.1
-```
-
-则使用局域网地址 `192.168.0.129`，不要使用 Docker 网桥地址
-`172.17.0.1`，也不要在 RK3588 上使用 `127.0.0.1`。
+主机和 RK3588 通过 SSH 隧道连接，不要求互相 `ping`，也不使用主机局域网 IP。
+主机侧的 MediaMTX、输入推流和 SSH 命令按照本目录的 `FLOW1.md` 执行。
 
 本文后续统一使用：
 
 ```text
-HOST_IP=192.168.0.129
-INPUT_URL=rtsp://192.168.0.129:8554/src_in
-OUTPUT_URL=rtsp://192.168.0.129:8554/ai_out
+INPUT_URL=rtsp://127.0.0.1:8556/src_in
+OUTPUT_URL=rtsp://127.0.0.1:8554/ai_out
 ```
 
-`HOST_IP` 只代表主机的局域网地址。RK3588 连接主机时，输入和输出 URL 中
-都要填写主机地址。
+`8556` 是 SSH `-R` 映射到 RK3588 的主机输入端口，`8554` 是 RK3588 本地
+MediaMTX 输出端口。主机通过 SSH `-L` 的 `8557` 查看输出。
 
 ## 2. 先跑通 FLOW1 的输入流
 
-在主机上启动 MediaMTX：
+在主机上启动 MediaMTX，并确认监听 `554`：
 
 ```bash
 ./mediamtx mediamtx.yml
@@ -68,17 +52,19 @@ OUTPUT_URL=rtsp://192.168.0.129:8554/ai_out
 另开主机终端推送测试视频：
 
 ```bash
-ffmpeg -re -stream_loop -1 -i ./test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://192.168.0.129:8554/src_in
+ffmpeg -re -stream_loop -1 -i ./test.mp4 -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:554/src_in
 ```
 
-在 RK3588 上检查网络和输入流：
+另开主机终端建立双向 SSH 隧道，并保持窗口运行：
 
-```bash
-ping 192.168.0.129
+```powershell
+ssh -R 8556:127.0.0.1:554 -L 8557:127.0.0.1:8554 root@172.19.30.3
 ```
 
+在 RK3588 上检查隧道输入流：
+
 ```bash
-ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://192.168.0.129:8554/src_in
+ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8556/src_in
 ```
 
 预期可以看到视频流，例如：
@@ -90,8 +76,8 @@ width=1138
 height=720
 ```
 
-输入流不能读取时，不要继续排查 RKNN。先确认 MediaMTX、主机防火墙、主机
-IP 和 RTSP URL 正确。
+输入流不能读取时，不要继续排查 RKNN。先确认主机 MediaMTX、FFmpeg 推流和
+SSH 隧道仍在运行，并确认隧道没有 `remote port forwarding failed`。
 
 ## 3. RK3588 环境检查
 
@@ -162,7 +148,7 @@ cv::VideoCapture capture(input_path);
 因此 `--input` 可以是本地文件，也可以是 RTSP URL。AI 流运行时使用：
 
 ```text
---input rtsp://HOST_IP:8554/src_in
+    --input rtsp://127.0.0.1:8556/src_in
 ```
 
 程序保持逐帧读取：
@@ -227,7 +213,7 @@ draw_detections(frame, detections);
 ```text
 ffmpeg -f rawvideo -pix_fmt bgr24 -s WIDTHxHEIGHT -r FPS -i pipe:0 \
   -an -c:v h264_rkmpp -pix_fmt yuv420p -f rtsp \
-  -rtsp_transport tcp rtsp://HOST_IP:8554/ai_out
+  -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
 ```
 
 这里的 `-s`、`-r` 由输入视频实际属性生成。当前 AI 流默认不转发音频，
@@ -273,7 +259,7 @@ cmake --build build -j2
 确认主机上的 MediaMTX 和 `src_in` 推流仍在运行后，在 RK3588 执行：
 
 ```bash
-./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input rtsp://192.168.0.129:8554/src_in --output rtsp://192.168.0.129:8554/ai_out --conf-thres 0.25 --iou-thres 0.45 --max-det 100
+./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input rtsp://127.0.0.1:8556/src_in --output rtsp://127.0.0.1:8554/ai_out --conf-thres 0.25 --iou-thres 0.45 --max-det 100
 ```
 
 正常启动时应看到：
@@ -282,7 +268,7 @@ cmake --build build -j2
 input: ...
 output: ...
 video=1138x720 fps=...
-output_mode=rtsp command=ffmpeg ... h264_rkmpp ...
+output_mode=rtsp command=ffmpeg ... h264_rkmpp ... rtsp://127.0.0.1:8554/ai_out
 output decode: ...
 frame=0 detections=... inference_ms=...
 ```
@@ -295,7 +281,7 @@ frame=0 detections=... inference_ms=...
 主机上使用 `ffplay` 查看带框的 AI 流：
 
 ```bash
-ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
+ffplay -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out
 ```
 
 如果主机没有 `ffplay`，可先安装：
@@ -307,7 +293,7 @@ sudo apt install -y ffmpeg
 无图形界面时检查 AI 输出流：
 
 ```bash
-ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8554/ai_out
+ffprobe -v error -rtsp_transport tcp -show_entries stream=index,codec_name,width,height -of default=noprint_wrappers=1 rtsp://127.0.0.1:8557/ai_out
 ```
 
 预期至少看到：
@@ -322,7 +308,7 @@ height=720
 也可以把 AI 流保存为最终结果文件：
 
 ```bash
-ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8554/ai_out -c copy ai_result.mp4
+ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8557/ai_out -c copy ai_result.mp4
 ```
 
 按 `Ctrl+C` 停止录制。录制终端停止不会停止 RK3588 推理程序。
@@ -349,7 +335,7 @@ ffmpeg -y -rtsp_transport tcp -i rtsp://127.0.0.1:8554/ai_out -c copy ai_result.
 实时 AI 流：
 
 ```bash
-./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input rtsp://192.168.0.129:8554/src_in --output rtsp://192.168.0.129:8554/ai_out --conf-thres 0.25 --iou-thres 0.45 --max-det 100
+./bin/debug_demo --model models/manhole-cover-yolo11s-production.rknn --input rtsp://127.0.0.1:8556/src_in --output rtsp://127.0.0.1:8554/ai_out --conf-thres 0.25 --iou-thres 0.45 --max-det 100
 ```
 
 ## 10. 排错顺序
@@ -376,11 +362,11 @@ Rockchip multimedia FFmpeg，或明确选择板端实际存在的 H.264 编码�
 同时检查三处：
 
 ```bash
-ffprobe -v error -rtsp_transport tcp rtsp://192.168.0.129:8554/src_in
+ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8556/src_in
 ```
 
 ```bash
-ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8554/ai_out
+ffprobe -v error -rtsp_transport tcp rtsp://127.0.0.1:8557/ai_out
 ```
 
 ```bash
@@ -406,13 +392,9 @@ frame=... detections=...
 
 ### 10.5 输入流读取失败
 
-确认 RK3588 使用的是主机局域网 IP：
-
-```bash
-ping 192.168.0.129
-```
-
-不要把 `172.17.0.1` 或 `127.0.0.1` 填入 RK3588 的输入 URL。
+确认 SSH 隧道仍在运行，并且 RK3588 输入使用
+`rtsp://127.0.0.1:8556/src_in`，输出使用
+`rtsp://127.0.0.1:8554/ai_out`；不要使用主机局域网 IP。
 
 ## 11. 验收标准
 

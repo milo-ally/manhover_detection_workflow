@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -38,6 +39,16 @@ void draw_detections(cv::Mat &frame, const std::vector<Detection> &detections) {
 
 bool is_rtsp_url(const std::string &value) {
     return value.rfind("rtsp://", 0) == 0 || value.rfind("rtsps://", 0) == 0;
+}
+
+bool open_input_video(cv::VideoCapture &capture, const std::string &input_path) {
+    if (!is_rtsp_url(input_path)) {
+        return capture.open(input_path);
+    }
+
+    // SSH port forwarding carries TCP only; prevent FFmpeg from opening UDP RTP ports.
+    setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp", 1);
+    return capture.open(input_path, cv::CAP_FFMPEG);
 }
 
 std::string shell_quote(const std::string &value) {
@@ -107,7 +118,11 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    cv::VideoCapture capture(input_path);
+    cv::VideoCapture capture;
+    if (is_rtsp_url(input_path)) {
+        std::cout << "rtsp_input_transport=tcp" << std::endl;
+    }
+    open_input_video(capture, input_path);
     if (!capture.isOpened()) {
         std::cerr << "cannot open input video: " << input_path << std::endl;
         return 1;
