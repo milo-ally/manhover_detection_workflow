@@ -270,7 +270,8 @@ python3 src_npu/val_detect_manhover_npu.py \
 model_deployment/ax650/manhole_cover_detection/
 ```
 
-它包含 `include/`、`plugins/`、`src/`、`msp_sdk/`，构建 `libmanhole_plugin.so` 和 `debug_demo`。编译环境需要 AArch64 工具链、AX650N SDK、`libax_engine.so`、`libax_sys.so` 和 OpenCV。
+它包含 `include/`、`plugins/`、`src/`、`msp_sdk/`，构建 `libmanhole_plugin.so` 和 `demo`。
+编译环境需要 AArch64 工具链、AX650N SDK、`libax_engine.so`、`libax_sys.so` 和 OpenCV。
 
 ```bash
 cd model_deployment/ax650/manhole_cover_detection
@@ -278,24 +279,31 @@ cmake -S . -B build \
   -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
   -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
 cmake --build build -j$(nproc)
+cmake --install build
 ```
 
-运行独立视频验证：
+离线视频验证（把 `config/streams_config.json` 的 `input_source` 指向本地 H.264 文件，
+模型放到 `models/yolo11s-manhole-detection.axmodel` 并同步修改 `models[].path`）：
 
 ```bash
-export LD_LIBRARY_PATH="$PWD/bin:/soc/lib:/usr/lib:$LD_LIBRARY_PATH"
-./bin/debug_demo \
-  --input /tmp/input.mp4 \
-  --output /tmp/output_boxed.mp4 \
-  --model /tmp/manhole-cover-yolo11s-production.axmodel \
-  --plugin ./bin/libmanhole_plugin.so
+cd bin
+export LD_LIBRARY_PATH="$PWD:/soc/lib:/usr/lib:$LD_LIBRARY_PATH"
+./demo -c ../config/streams_config.json -m offline -o /tmp/output_boxed.mp4
 ```
 
-当前插件按 `output0 [1,9,8400]` 解码，输出 `AI_RESULT_T` 归一化框；`src/main.cpp` 负责视频读取、绘框和输出视频。
+当前插件按 `output0 [1,9,8400]` 解码，输出 `AI_RESULT_T` 归一化框；`demo` 的主链路
+（ConfigService/VideoStreamManager/VideoDemux/IVPS/OSD/VENC/RTP）负责视频读取、
+画框和输出。模型文件不提交 Git，需从
+`model_convert/ax650/output/yolo11s-manhole-detection/yolo11s-manhole-detection.axmodel`
+复制。
 
-### 6.2 完整 device_side
+### 6.2 在线流部署
 
-完整流式工程位于 `model_deployment/ax650/device_side/`，负责 RTSP 输入、AX 视频链路、插件加载、OSD 和推流。井盖插件注册、配置和编译说明见 [model_deployment/ax650/FLOW1.md](model_deployment/ax650/FLOW1.md)。
+在线流式链路（RTSP 输入、AX 视频链路、插件加载、OSD 和 RTP 推流）也由同一个
+`model_deployment/ax650/manhole_cover_detection` 工程完成，井盖插件注册、配置和编译
+说明见 [model_deployment/ax650/README.md](model_deployment/ax650/README.md)，
+基础推流链路见 [model_deployment/ax650/FLOW1.md](model_deployment/ax650/FLOW1.md) 和
+[model_deployment/ax650/FLOW2.md](model_deployment/ax650/FLOW2.md)。
 
 当前推流链路使用 SSH 双向端口转发，不要求主机和 AX650 互相 ping 通。
 按 [model_deployment/ax650/FLOW1.md](model_deployment/ax650/FLOW1.md) 建立隧道：

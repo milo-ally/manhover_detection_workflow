@@ -28,10 +28,15 @@ model_deployment/rk3588/manhole_cover_detection/
 ├── plugins/model_manhole_cover.cpp
 ├── src/main.cpp
 ├── models/manhole-cover-yolo11s-production.rknn
-└── rknpu2/
+└── rknpu2/                    # 不随仓库提交（.gitignore 忽略），编译前需要放回
     ├── include/rknn_api.h
     └── lib/librknnrt.so
 ```
+
+`rknpu2/` 目录被 `.gitignore` 忽略，不会出现在克隆的仓库里；`CMakeLists.txt` 默认从
+`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先从
+Rockchip 官方 `rknn_model_zoo` 的 `3rdparty/rknpu2` 把对应 RK3588/aarch64 的 Runtime
+放回本目录（提交见 `SOP.md`）。
 
 ## 板端编译
 
@@ -114,4 +119,4 @@ cmake -S . -B build -DOpenCV_DIR=/path/to/opencv/lib/cmake/opencv4
 - 部署模型使用 FP RKNN；输出通过 `want_float = 1` 请求 Runtime 返回 FP32。
 - 不要直接使用当前 INT8 产物：该检测头的坐标和类别分数共用输出量化范围，可能导致类别分数全部为 0。
 - `src/main.cpp` 中的 `draw_detections` 是后续接入插件、告警或推流前的处理位置；当前先把结果写入输出视频。
-- RKNN Runtime 必须与板端架构匹配。本目录提供的是 `aarch64` 的 `librknnrt.so`。
+- RKNN Runtime 必须与板端架构匹配，使用 `aarch64` 的 `librknnrt.so`；该文件不随仓库提交，需要先放回 `rknpu2/lib/`。

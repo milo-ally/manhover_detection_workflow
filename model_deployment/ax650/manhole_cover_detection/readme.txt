@@ -2,7 +2,7 @@ AX650 manhole-cover demo
 
 Compile on the AX650 build environment:
 
-    cd device_side
+    cd manhole_cover_detection
     cmake -S . -B build
     cmake --build build -j$(nproc)
 

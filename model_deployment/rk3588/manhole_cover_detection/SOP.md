@@ -11,10 +11,12 @@ ls -lh \
   rknpu2/lib/librknnrt.so
 ```
 
-准备一个板端 OpenCV 可以读取的视频，例如 `input.mp4`。
-
-本目录的 `rknn_api.h` 和 `librknnrt.so` 来自 Rockchip 官方 `rknn_model_zoo`，版本提交为：
+注意：`rknpu2/` 目录不随仓库提交（已被 `.gitignore` 忽略），`CMakeLists.txt` 默认在
+`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先把
+Runtime 放回本目录。本工程使用的 `rknn_api.h` 和 `librknnrt.so` 来自 Rockchip 官方 `rknn_model_zoo`，版本提交为：
 `bad6c7334531becaf90a561988519b7bec34d0ab`。如果需要重新准备 Runtime，应从官方仓库的 `3rdparty/rknpu2` 取对应 RK3588/aarch64 文件。
+
+准备一个板端 OpenCV 可以读取的视频，例如 `input.mp4`。
 
 ## 2. 编译
 

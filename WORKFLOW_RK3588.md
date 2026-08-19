@@ -188,10 +188,15 @@ model_deployment/rk3588/manhole_cover_detection/
 ├── plugins/model_manhole_cover.cpp
 ├── src/main.cpp
 ├── models/manhole-cover-yolo11s-production.rknn
-└── rknpu2/
+└── rknpu2/                    # 不随仓库提交（.gitignore 忽略），编译前需要放回
     ├── include/rknn_api.h
     └── lib/librknnrt.so
 ```
+
+`rknpu2/` 被 `.gitignore` 忽略，不会出现在克隆的仓库里；`CMakeLists.txt` 默认从
+`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先从
+Rockchip 官方 `rknn_model_zoo` 的 `3rdparty/rknpu2` 把对应 RK3588/aarch64 的 Runtime
+放回本目录（版本提交见 `model_deployment/rk3588/manhole_cover_detection/SOP.md`）。
 
 该工程参考官方 YOLO11 C++ 示例的 RKNN API 调用方式，但当前模型是单输出 `[1,9,8400]`，因此后处理按当前五分类输出实现，不能直接套用三分支 DFL 后处理。
 

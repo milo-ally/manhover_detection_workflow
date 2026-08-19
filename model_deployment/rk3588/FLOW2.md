@@ -107,6 +107,10 @@ FFmpeg 二进制。
 file rknpu2/lib/librknnrt.so
 ```
 
+注意：`rknpu2/` 目录不随仓库提交（已被 `.gitignore` 忽略），`CMakeLists.txt` 默认从
+`rknpu2/include` 和 `rknpu2/lib` 查找 `rknn_api.h` 与 `librknnrt.so`，编译前必须先按
+`manhole_cover_detection/SOP.md` 从官方 `rknn_model_zoo` 把 Runtime 放回本目录。
+
 RK3588 应显示 `ARM aarch64`。模型和 Runtime 必须匹配板端架构。
 
 ## 4. 模型要求
@@ -241,7 +245,7 @@ rm -rf build
 ```
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOpenCV_DIR="/home/cat/opt/opencv-dev/usr/lib/aarch64-linux-gnu/cmake/opencv4"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOpenCV_DIR="$HOME/opt/opencv-dev/usr/lib/aarch64-linux-gnu/cmake/opencv4"
 ```
 
 编译：

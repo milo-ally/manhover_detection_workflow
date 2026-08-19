@@ -33,7 +33,7 @@ ffmpeg -encoders | findstr libx264 # 出现 libx264 代表编码器正常
 
 下载 Windows amd64 版本 release 二进制包，省去编译。
 
-解压包内直接包含 `mediamtx.exe` 和 `mediamtx.yml`。MediaMTX 1100 使用 `protocols`
+解压包内直接包含 `mediamtx.exe` 和 `mediamtx.yml`。MediaMTX v1.10.0 使用 `protocols`
 配置 RTSP 传输方式；将配置文件修改：
 
 ```yml
