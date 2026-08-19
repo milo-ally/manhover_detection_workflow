@@ -47,22 +47,45 @@ bool RkDecoder::init() {
     return true;
 }
 
+// 首帧 info-change：解码器会先发一个仅含 SPS/PPS 信息的帧，需要用该分辨率
+// 建外部 buffer group 并喂回解码器，再 mark info-change-ready 让它继续正常解码。
+bool RkDecoder::setupBufferGroup(int bufSize) {
+    // MPP_BUFFER_TYPE_ION 在 Linux/mali 上可用；DMA-HEAP 亦可。
+    MppBufferGroup grp = nullptr;
+    // 预留 12 个解码帧缓冲（与官方 demo 外部模式一致）
+    MPP_RET ret = mpp_buffer_group_get_external(&grp, MPP_BUFFER_TYPE_ION);
+    if (ret != MPP_OK) {
+        fprintf(stderr, "[RkMedia] mpp_buffer_group_get failed ret=%d\n", ret);
+        return false;
+    }
+    if (bufSize > 0) {
+        mpp_buffer_group_limit_config(grp, (size_t)bufSize, 12);
+    }
+    ret = mpi_of(mpi_)->control(ctx_of(ctx_), MPP_DEC_SET_EXT_BUF_GROUP, grp);
+    if (ret != MPP_OK) {
+        fprintf(stderr, "[RkMedia] MPP_DEC_SET_EXT_BUF_GROUP failed ret=%d\n", ret);
+        mpp_buffer_group_put(grp);
+        return false;
+    }
+    bufGroup_ = grp;
+    return true;
+}
+
 bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
     if (!init_ || !data || size == 0) return false;
 
     MppPacket packet = nullptr;
     mpp_packet_init(&packet, const_cast<uint8_t*>(data), size);
 
-    // decode_put_packet 是异步接口。Buffer 满时返回 MPP_ERR_BUFFER_FULL(-1012)，
-    // 必须先 decode_get_frame 清空输出缓冲，再短暂等待（流水线还没出帧），然后重试。
-    const int kMaxRetry = 50;
+    // decode_put_packet 是异步接口；buffer 满时返回 MPP_ERR_BUFFER_FULL(-1012)，
+    // 需先 decode_get_frame 清空输出缓冲（含 info-change 处理），短暂等待后重试。
+    const int kMaxRetry = 200;  // 累计约 4s 上限
     MPP_RET ret = MPP_OK;
     for (int attempt = 0; attempt < kMaxRetry; ++attempt) {
         ret = mpi_of(mpi_)->decode_put_packet(ctx_of(ctx_), packet);
         if (ret == MPP_OK) break;
         if (ret == MPP_ERR_BUFFER_FULL || ret == MPP_ERR_DISPLAY_FULL) {
-            drainFrames();  // 清输出缓冲
-            // 短暂等待（如 1ms），让硬件流水线推进；累计约 2s 仍未成功则放弃
+            drainFrames();  // 处理 info-change + 清输出缓冲
             struct timespec ts = {0, 1 * 1000 * 1000};  // 1ms
             nanosleep(&ts, nullptr);
             continue;
@@ -73,17 +96,14 @@ bool RkDecoder::sendPacket(const uint8_t* data, size_t size) {
 
     if (ret != MPP_OK) {
         static int errLogged = 0;
-        if (errLogged++ < 10) {
-            fprintf(stderr, "[RkMedia] decode_put_packet failed ret=%d (after %d attempts)\n",
-                    ret, kMaxRetry);
-        }
+        if (errLogged++ < 10)
+            fprintf(stderr, "[RkMedia] decode_put_packet failed ret=%d\n", ret);
         return false;
     }
     return drainFrames();
 }
 
 bool RkDecoder::drainFrames() {
-    // MPP 是多帧硬件流水线，一帧可能对应多个 packet，这里持续取满所有就绪帧
     for (int i = 0; i < 32; ++i) {
         MppFrame frame = nullptr;
         MPP_RET ret = mpi_of(mpi_)->decode_get_frame(ctx_of(ctx_), &frame);
@@ -92,12 +112,35 @@ bool RkDecoder::drainFrames() {
         const int w = static_cast<int>(mpp_frame_get_width(frame));
         const int h = static_cast<int>(mpp_frame_get_height(frame));
         const int hstride = static_cast<int>(mpp_frame_get_hor_stride(frame));
+        const int vstride = static_cast<int>(mpp_frame_get_ver_stride(frame));
+
+        // 首帧 info-change：解码器请求确定输出分辨率，需建立外部 buffer group
+        if (mpp_frame_get_info_change(frame)) {
+            const int bufSize = mpp_frame_get_buf_size(frame);
+            fprintf(stderr, "[RkMedia] decoder info-change: %dx%d hstride=%d vstride=%d buf_size=%d\n",
+                    w, h, hstride, vstride, bufSize);
+            if (!setupBufferGroup(bufSize)) {
+                fprintf(stderr, "[RkMedia] setupBufferGroup failed\n");
+                mpp_frame_deinit(&frame);
+                return false;
+            }
+            // 让解码器知道外部 buffer 已就绪，继续解码
+            ret = mpi_of(mpi_)->control(ctx_of(ctx_), MPP_DEC_SET_INFO_CHANGE_READY, nullptr);
+            if (ret != MPP_OK) {
+                fprintf(stderr, "[RkMedia] MPP_DEC_SET_INFO_CHANGE_READY failed ret=%d\n", ret);
+                mpp_frame_deinit(&frame);
+                return false;
+            }
+            bufferPrepared_ = true;
+            mpp_frame_deinit(&frame);
+            continue;  // info-change 帧不含像素，不回调
+        }
+
         MppBuffer buf = mpp_frame_get_buffer(frame);
         static int frameLogCount = 0;
-        if (frameLogCount++ < 3 || (frameLogCount % 300) == 0) {
+        if (frameLogCount++ < 3 || (frameLogCount % 300) == 0)
             fprintf(stderr, "[RkMedia] dec frame %d: %dx%d hstride=%d\n",
                     frameLogCount, w, h, hstride);
-        }
         if (buf && w > 0 && h > 0 && hstride > 0) {
             const size_t ysz = static_cast<size_t>(hstride) * h;
             outBuf_.resize(ysz + ysz / 2);
@@ -120,9 +163,14 @@ void RkDecoder::deinit() {
         if (mpi_) mpi_of(mpi_)->reset(ctx_of(ctx_));
         mpp_destroy(ctx_of(ctx_));
     }
+    if (bufGroup_) {
+        mpp_buffer_group_put(static_cast<MppBufferGroup>(bufGroup_));
+        bufGroup_ = nullptr;
+    }
     ctx_ = nullptr;
     mpi_ = nullptr;
     outBuf_.clear();
+    bufferPrepared_ = false;
     init_ = false;
 }
 

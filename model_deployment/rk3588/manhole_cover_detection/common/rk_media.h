@@ -43,9 +43,12 @@ public:
 
 private:
     bool drainFrames();
+    bool setupBufferGroup(int bufSize);   // 处理首帧 info-change：建外部 buffer group
 
-    void* ctx_ = nullptr;   // MppCtx
-    void* mpi_ = nullptr;   // MppApi*
+    void* ctx_ = nullptr;           // MppCtx
+    void* mpi_ = nullptr;           // MppApi*
+    void* bufGroup_ = nullptr;      // MppBufferGroup（外部 buffer）
+    bool bufferPrepared_ = false;   // info-change 是否已处理
     FrameCallback frameCb_;
     std::vector<uint8_t> outBuf_;  // 当前帧拷贝缓冲（MPP buffer 释放前拷贝出来）
     bool init_ = false;
