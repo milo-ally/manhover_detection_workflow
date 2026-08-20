@@ -146,6 +146,7 @@ cd model_val/rk3588
   src/val_detect_manhole_onnx.py \
   --onnx models/manhole-cover-yolo11s-production.onnx \
   --data data_rknn.yaml \
+  --device cpu \
   --limit 0
 ```
 

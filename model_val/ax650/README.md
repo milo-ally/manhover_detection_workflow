@@ -50,7 +50,7 @@ cd /workflow/model_val/ax650
 python src_gpu/val_detect_manhover_onnx.py \
   --onnx_model model/yolo11s-manhole-detection.onnx \
   --data data_gpu.yaml \
-  --provider auto \
+  --device cpu \
   --conf-thres 0.001 \
   --iou-thres 0.7 \
   --max-det 300 \
@@ -68,7 +68,7 @@ cd /workflow/model_val/ax650
 python src_gpu/val_detect_manhover_onnx.py \
   --onnx_model model/yolo11s-manhole-detection.onnx \
   --data data_gpu.yaml \
-  --provider auto \
+  --device cpu \
   --conf-thres 0.001 \
   --iou-thres 0.7 \
   --max-det 300 \
@@ -78,7 +78,7 @@ python src_gpu/val_detect_manhover_onnx.py \
   --metrics-json runs/yolo11s-manhole-detection_onnx_metrics.json
 ```
 
-强制 GPU 时使用 `--provider cuda`；流程冒烟测试可使用 `--provider cpu --limit 10`。
+选择推理设备时使用 `--device`：`cpu` 或指定 GPU `cuda0` / `cuda1` / `cuda2` 等；例如强制 GPU 0 使用 `--device cuda0`，流程冒烟测试可使用 `--device cpu --limit 10`。
 
 ## 3. AXModel 验证
 

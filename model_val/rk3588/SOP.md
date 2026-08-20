@@ -23,8 +23,11 @@ pip install -r requirements_onnx.txt
 python src/val_detect_manhole_onnx.py \
   --onnx models/manhole-cover-yolo11s-production.onnx \
   --data data_rknn.yaml \
+  --device cpu \
   --limit 0
 ```
+
+选择推理设备时使用 `--device`：`cpu` 或指定 GPU `cuda0` / `cuda1` / `cuda2` 等（需 `onnxruntime-gpu`）。
 
 ## 3. RK3588 板端运行
 

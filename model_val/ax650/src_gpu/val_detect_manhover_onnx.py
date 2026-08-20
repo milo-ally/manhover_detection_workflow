@@ -9,20 +9,10 @@ from validation_common import run_validation  # noqa: E402
 
 
 class OnnxRunner:
-    def __init__(self, model_path, output_name, provider):
+    def __init__(self, model_path, output_name, device):
         import onnxruntime as ort
 
-        available = ort.get_available_providers()
-        if provider == "cuda":
-            if "CUDAExecutionProvider" not in available:
-                raise RuntimeError(f"CUDAExecutionProvider unavailable: {available}")
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        elif provider == "cpu":
-            providers = ["CPUExecutionProvider"]
-        else:
-            providers = (["CUDAExecutionProvider", "CPUExecutionProvider"]
-                         if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"])
-        self.session = ort.InferenceSession(model_path, providers=providers)
+        self.session = ort.InferenceSession(model_path, providers=resolve_onnx_provider(device))
         self.input = self.session.get_inputs()[0]
         output_names = [item.name for item in self.session.get_outputs()]
         if output_name not in output_names:
@@ -72,7 +62,8 @@ def main():
     parser.add_argument("--onnx_model", required=True)
     parser.add_argument("--data", default="data_gpu.yaml")
     parser.add_argument("--output-name", default="output0")
-    parser.add_argument("--provider", choices=("auto", "cuda", "cpu"), default="auto")
+    parser.add_argument("--device", default="cpu",
+                        help="inference device: 'cpu' or 'cudaN' (e.g. cuda0, cuda1, cuda2)")
     parser.add_argument("--conf-thres", type=float, default=0.001)
     parser.add_argument("--iou-thres", type=float, default=0.7)
     parser.add_argument("--max-det", type=int, default=300)
@@ -84,7 +75,7 @@ def main():
     parser.add_argument("--metrics-json", help="Optional: output metrics json file path, e.g runs/metrics.json")
 
     args = parser.parse_args()
-    runner = OnnxRunner(args.onnx_model, args.output_name, args.provider)
+    runner = OnnxRunner(args.onnx_model, args.output_name, args.device)
 
     actual_image_dir = args.image_dir if args.save_images else None
 

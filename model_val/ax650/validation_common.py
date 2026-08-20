@@ -47,6 +47,20 @@ def resolve_input(shape):
     return (height, width), layout
 
 
+def resolve_onnx_provider(device):
+    """Map a --device value ('cpu' or 'cudaN') to an onnxruntime provider list."""
+    import onnxruntime as ort
+
+    if device == "cpu":
+        return ["CPUExecutionProvider"]
+    if not (device.startswith("cuda") and device[len("cuda"):].isdigit()):
+        raise ValueError(f"invalid --device {device!r}: use 'cpu' or 'cudaN' (e.g. cuda0, cuda1)")
+    if "CUDAExecutionProvider" not in ort.get_available_providers():
+        raise RuntimeError(f"CUDAExecutionProvider unavailable: {ort.get_available_providers()}")
+    return [("CUDAExecutionProvider", {"device_id": int(device[len("cuda"):])}),
+            "CPUExecutionProvider"]
+
+
 def letterbox(image, new_shape):
     src_h, src_w = image.shape[:2]
     dst_h, dst_w = new_shape

@@ -247,12 +247,14 @@ pip install -r requirements_onnx.txt
 python src_gpu/val_detect_manhover_onnx.py \
   --onnx_model model/yolo11s-manhole-detection.onnx \
   --data data_gpu.yaml \
-  --provider auto \
+  --device cpu \
   --conf-thres 0.001 \
   --iou-thres 0.7 \
   --max-det 300 \
   --metrics-json runs/yolo11s-manhole-detection_onnx_metrics.json
 ```
+
+选择推理设备时使用 `--device`：`cpu` 或指定 GPU `cuda0` / `cuda1` / `cuda2` 等（需 `onnxruntime-gpu`）。
 
 当前已实际得到：`mAP50=0.7397`，`mAP50-95=0.3838`（11 张图片、19 个目标）。`conf=0.001` 用于指标验收，人工查看可使用 `conf=0.25`。
 
