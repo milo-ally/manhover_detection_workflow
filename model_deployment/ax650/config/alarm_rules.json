@@ -1,0 +1,46 @@
+{
+  "alarm_rules": [
+    {
+      "model_type": "helmet",
+      "alarm_type": "未戴安全帽",
+      "severity": "high",
+      "report_all": false,
+      "labels": ["no-helmet"]
+    },
+    {
+      "model_type": "fall",
+      "alarm_type": "人員跌倒",
+      "severity": "high",
+      "report_all": true,
+      "labels": []
+    },
+    {
+      "model_type": "pose",
+      "alarm_type": "人員跌倒",
+      "severity": "high",
+      "report_all": true,
+      "labels": []
+    },
+    {
+      "model_type": "fire",
+      "alarm_type": "煙火檢測",
+      "severity": "critical",
+      "report_all": true,
+      "labels": []
+    },
+    {
+      "model_type": "smoke",
+      "alarm_type": "煙霧檢測",
+      "severity": "critical",
+      "report_all": true,
+      "labels": []
+    },
+    {
+      "model_type": "manhole_cover",
+      "alarm_type": "井蓋異常",
+      "severity": "high",
+      "report_all": false,
+      "labels": ["broke", "lose", "uncovered"]
+    }
+  ]
+}

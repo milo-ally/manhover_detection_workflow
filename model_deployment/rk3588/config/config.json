@@ -1,0 +1,5 @@
+{
+    "rtsp_url": "rtsp://172.19.31.10:8554/lygstream1",
+    "ai_lib_path": "./librkdl_lib.so",
+    "model_path": "/root/device_side_rk3588/models/yolov5s.rknn"
+}

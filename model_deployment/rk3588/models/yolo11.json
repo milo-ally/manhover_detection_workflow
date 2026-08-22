@@ -1,0 +1,23 @@
+{
+    "MODEL_TYPE": "MT_DET_YOLOV8",
+    "MODEL_PATH": "../models/yolo11_helmet.rknn",
+    "YOLOV5_FACE": false,
+    
+    "ANCHORS": [
+        8, 16, 32
+    ],
+    
+    "STRIDES": [
+        8, 16, 32
+    ],
+    
+    "CLASS_NAMES": [
+        "helmet"
+    ],
+    
+    "CLASS_NUM": 1,
+    
+    "NMS_THRESHOLD": 0.45,
+    "PROB_THRESHOLD": 0.45,
+    "LABEL_PATH": ""
+}

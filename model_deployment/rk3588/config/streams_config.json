@@ -1,0 +1,179 @@
+{
+    "streams": [
+        {
+            "stream_id": 1,
+            "input_source": "rtsp://172.19.31.71:8554/lygstream1",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60,
+            "models": [
+                {
+                    "name": "helmet",
+                    "path": "../models/yolo11_helmet.rknn",
+                    "conf_threshold": 0.45,
+                    "nms_threshold": 0.45
+                },
+                {
+                    "name": "pose",
+                    "path": "../models/yolo11_pose_cut.rknn",
+                    "conf_threshold": 0.45,
+                    "nms_threshold": 0.45
+                }
+            ]
+        },
+        {
+            "stream_id": 2,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream2",
+            "model_name": "pose",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 3,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream3",
+            "model_name": "helmet",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 4,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream4",
+            "model_name": "pose",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 5,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream5",
+            "model_name": "helmet",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 6,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream6",
+            "model_name": "pose",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 7,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream7",
+            "model_name": "helmet",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 8,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream8",
+            "model_name": "pose",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 9,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream9",
+            "model_name": "helmet",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 10,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream10",
+            "model_name": "pose",
+            "conf_thres": 0.45,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        },
+        {
+            "stream_id": 11,
+            "input_source": "rtsp://172.19.31.36:8554/lygstream11",
+            "model_name": "manhole_cover",
+            "conf_thres": 0.25,
+            "nms_thres": 0.45,
+            "output_width": 1920,
+            "output_height": 1080,
+            "fps": 30,
+            "enable_ai": true,
+            "ai_output_width": 640,
+            "ai_output_height": 640,
+            "ai_fps": 60
+        }
+    ],
+    "global_settings": {
+        "mediamtx_host": "127.0.0.1",
+        "mediamtx_port": "8000",
+        "default_model": "helmet",
+        "default_conf_thres": 0.45,
+        "default_nms_thres": 0.45,
+        "enable_raw_stream": false
+    }
+}
