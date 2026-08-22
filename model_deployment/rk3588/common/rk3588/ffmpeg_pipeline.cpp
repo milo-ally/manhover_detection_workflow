@@ -23,6 +23,8 @@ std::string av_error(int code) {
 }
 
 const AVCodec* rockchip_decoder(AVCodecID id) {
+    const char* force_software = std::getenv("RK3588_FORCE_SOFTWARE_CODEC");
+    if (force_software && std::strcmp(force_software, "1") == 0) return nullptr;
     if (id == AV_CODEC_ID_H264) return avcodec_find_decoder_by_name("h264_rkmpp");
     if (id == AV_CODEC_ID_HEVC) return avcodec_find_decoder_by_name("hevc_rkmpp");
     return nullptr;

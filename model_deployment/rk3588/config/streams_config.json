@@ -156,7 +156,7 @@
         {
             "stream_id": 11,
             "input_source": "rtsp://172.19.31.36:8554/lygstream11",
-            "model_name": "manhole_cover",
+            "model_name": "models/manhole-cover-yolo11s-production.rknn",
             "conf_thres": 0.25,
             "nms_thres": 0.45,
             "output_width": 1920,

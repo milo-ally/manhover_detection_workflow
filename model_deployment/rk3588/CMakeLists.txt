@@ -114,6 +114,7 @@ endif()
 
 add_library(ByteTrack SHARED
     third-party/ByteTrack/src/BYTETracker.cpp
+    third-party/ByteTrack/src/utils.cpp
     third-party/ByteTrack/src/kalmanFilter.cpp
     third-party/ByteTrack/src/lapjv.cpp
     third-party/ByteTrack/src/STrack.cpp
